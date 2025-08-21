@@ -1,0 +1,116 @@
+# Stage 1: RTX 4090 Optimized Configuration
+# Adjusted for 24GB VRAM - Safe memory usage with good performance
+
+stage:
+  name: "wikipedia_foundation_rtx4090"
+  description: "Train on Wikipedia - Optimized for single RTX 4090 (24GB)"
+  
+data:
+  # Primary dataset - YOUR uploaded Wikipedia dataset
+  dataset_name: "Yxanul/wikipedia-2k-high-quality"
+  dataset_split: "train"
+  streaming: true          # Stream from HuggingFace
+  num_examples: 239000     # Actual number of articles
+  avg_tokens: 4000         # Average ~4K tokens per article
+  total_tokens: 956000000  # ~1B tokens total
+  
+  # Data processing
+  tokenizer: "gpt2"
+  max_sequence_length: 2048  # Keep full context
+  stride: 1024             # 50% overlap for sliding window
+  
+training:
+  # Batch size optimized for RTX 4090 (24GB VRAM)
+  # With 177M model + 2048 seq length:
+  # - Batch size 4: ~16GB VRAM (safe, room for spikes)
+  # - Batch size 6: ~20GB VRAM (pushing it)
+  # - Batch size 8: ~22GB VRAM (risky, may OOM)
+  
+  per_device_train_batch_size: 4    # Safe for 24GB VRAM
+  gradient_accumulation_steps: 8     # Effective batch = 4 * 8 = 32
+  gradient_checkpointing: true       # Trade compute for memory
+  
+  # Training duration
+  num_train_epochs: 1
+  max_steps: -1  # Set to specific number if you want to limit
+  
+  # Optimizer settings (AdamW)
+  learning_rate: 2.0e-4
+  weight_decay: 0.1
+  adam_beta1: 0.9
+  adam_beta2: 0.95
+  adam_epsilon: 1.0e-8
+  max_grad_norm: 1.0
+  
+  # Scheduler
+  lr_scheduler_type: "cosine"
+  warmup_steps: 2000
+  
+  # Logging and saving
+  logging_steps: 10
+  save_steps: 1000        # Save more frequently on single GPU
+  eval_steps: 500         # Validate more often
+  save_total_limit: 5
+  
+  # Performance optimizations for RTX 4090
+  fp16: false            # RTX 4090 prefers bf16
+  bf16: true             # Better for RTX 4090
+  tf32: true             # Enable TF32 for better perf
+  dataloader_num_workers: 2
+  dataloader_pin_memory: true
+  
+  # Sequence length curriculum (memory-aware)
+  use_curriculum: true
+  curriculum_stages:
+    - step: 0
+      seq_len: 512       # Start small
+      batch_size: 8      # Can fit more with shorter sequences
+    - step: 5000
+      seq_len: 1024      
+      batch_size: 6      # Medium sequences
+    - step: 10000
+      seq_len: 1536
+      batch_size: 4      # Longer sequences
+    - step: 15000
+      seq_len: 2048      # Full length
+      batch_size: 4      # Maintain safe batch size
+  
+  # Memory optimizations
+  gradient_checkpointing_steps: 4  # Checkpoint every 4 layers
+  clear_cache_steps: 100           # Clear CUDA cache periodically
+  
+  # Mixed precision settings
+  mixed_precision: "bf16"   # Better stability than fp16
+  
+  # WandB settings
+  wandb:
+    project: "yxanul-177m-rtx4090"
+    name: "stage1_wikipedia"
+    tags: ["rtx4090", "24gb", "single-gpu"]
+    log_model: false  # Don't upload model to save bandwidth
+
+validation:
+  per_device_eval_batch_size: 8  # Can use larger batch for eval
+  validation_split: 0.01         # 1% for validation (faster)
+  validation_steps: 500          # Run validation every 500 steps
+  
+# RTX 4090 Performance Expectations:
+# - Memory usage: ~18-20GB (safe margin)
+# - Tokens/second: ~15,000-20,000
+# - Time per epoch: ~15-20 hours
+# - Total training time: ~24-48 hours for good results
+
+# Memory Breakdown (approximate):
+# - Model parameters: 350MB (177M * 2 bytes for BF16)
+# - Optimizer states: 700MB (2x parameters for Adam)
+# - Activations (batch=4, seq=2048): ~8GB
+# - Gradients: ~4GB
+# - Peak during backward: ~16-18GB
+# Total: ~18-20GB (safe for 24GB card)
+
+# Tips for RTX 4090:
+# 1. If OOM, reduce batch_size to 3 or even 2
+# 2. Enable gradient_checkpointing for more memory
+# 3. Use bf16 instead of fp16 for better stability
+# 4. Monitor memory with nvidia-smi
+# 5. Clear cache if memory grows: torch.cuda.empty_cache()

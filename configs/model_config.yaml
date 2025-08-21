@@ -1,0 +1,78 @@
+# Yxanul 0.6B Deep Transformer Configuration
+# Architecture: Deep and narrow for better compositional learning
+
+model:
+  name: "yxanul-0.6B-deep"
+  type: "deep_transformer"
+  
+  # Core dimensions (deep & narrow)
+  hidden_size: 768           # Smaller d_model
+  num_layers: 28             # Much deeper than typical 12
+  num_attention_heads: 12    
+  num_kv_heads: 2            # Grouped-Query Attention (6:1 ratio)
+  intermediate_size: 2048    # Optimized for SwiGLU: 8/3 * hidden_size
+  
+  # Vocabulary and positions
+  vocab_size: 50257          # GPT-2 tokenizer
+  max_position_embeddings: 4096
+  type_vocab_size: 0         # No token types
+  
+  # Advanced architecture features
+  activation_function: "swiglu"  # Faster than GEGLU, used in Llama
+  use_swiglu: true              # Enable SwiGLU
+  use_rotary_embeddings: true   # RoPE for better length generalization
+  use_rope: true                # Enable RoPE
+  rope_theta: 10000.0
+  rope_scaling: null           # Can add NTK scaling later
+  
+  # Normalization
+  layer_norm_type: "rmsnorm"    # 10-15% faster than LayerNorm
+  use_rmsnorm: true             # Enable RMSNorm
+  pre_norm: true                # Pre-normalization (more stable)
+  layer_norm_eps: 1e-5
+  
+  # Regularization (minimal for pretraining)
+  attention_dropout: 0.0
+  hidden_dropout: 0.0
+  
+  # Initialization
+  initializer_range: 0.02      # Standard deviation
+  use_scaled_init: true        # Scale by 1/sqrt(2*n_layers)
+  
+  # Memory optimizations
+  use_gradient_checkpointing: true
+  checkpoint_every_n_layers: 4   # Checkpoint every 4th layer
+  
+  # Attention optimizations
+  use_flash_attention: true
+  flash_attention_version: 3
+  attention_implementation: "flash_attention_3"
+  
+  # Special tokens
+  pad_token_id: 50256
+  bos_token_id: 50256
+  eos_token_id: 50256
+  
+  # Factorized embeddings (massive parameter savings!)
+  use_factorized_embeddings: true
+  factorization_dim: 128  # Bottleneck dimension (83% reduction in embedding params)
+  
+# Model size calculation (with GQA + Factorized Embeddings)
+# Factorized Embeddings: vocab_size * r + r * hidden = 50257 * 128 + 128 * 768 = 6.5M
+# Original embeddings would be: 50257 * 768 = 38.6M (saved 32.1M!)
+# 
+# Parameters per layer:
+# Q_proj = hidden^2 = 768^2 = 590K  
+# KV_proj = 2 * num_kv_heads * head_dim * hidden = 2 * 2 * 64 * 768 = 196K
+# O_proj = hidden^2 = 590K
+# FFN (SwiGLU) = 3 * hidden * intermediate = 3 * 768 * 2048 = 4.7M
+# 
+# Total = 6.5M (embeddings) + 28 * (590K + 196K + 590K + 4.7M)
+#       = 6.5M + 28 * 6.1M
+#       = 6.5M + 171M  
+#       = 177.5M parameters!
+# 
+# Savings breakdown:
+# - SwiGLU optimization: 66M saved
+# - Factorized embeddings: 32.1M saved  
+# - Total: 98.1M parameters saved!

@@ -1,0 +1,229 @@
+# Comprehensive Optimization Configuration
+# Every trick to maximize training speed on 8x A100/H100
+
+# Mixed Precision Training
+mixed_precision:
+  enabled: true
+  dtype: "bfloat16"        # bf16 for A100, can be "fp8" for H100
+  loss_scale: "dynamic"     # Automatic loss scaling
+  initial_scale: 65536
+  growth_interval: 2000
+  
+  # FP8 specific (H100/H200 only)
+  fp8_config:
+    enabled: false          # Set true if using H100
+    format: "e4m3"         # or "e5m2"
+    amax_history_len: 1024
+    amax_compute_algo: "most_recent"
+
+# Flash Attention Configuration
+flash_attention:
+  enabled: true
+  version: 3               # Latest version
+  causal: true            # For autoregressive LM
+  window_size: null       # Full attention (no sliding window)
+  deterministic: false    # Faster but non-deterministic
+
+# PyTorch 2.0 Compile
+torch_compile:
+  enabled: true
+  backend: "inductor"      # Best for NVIDIA GPUs
+  mode: "max-autotune"     # Maximum optimization
+  fullgraph: true          # Compile entire model
+  dynamic: false           # Static shapes for speed
+  options:
+    triton.cudagraphs: true
+    triton.autotune_pointwise: true
+    max_autotune_gemm: true
+
+# Fused Kernel Operations
+fused_operations:
+  fused_adam: true         # Apex FusedAdam
+  fused_layer_norm: true   # Apex FusedLayerNorm
+  fused_dropout_add: true  # Combine dropout + residual
+  fused_gelu: true         # For GEGLU activation
+  fused_bias_dropout: true
+  
+# Memory Optimizations
+memory:
+  gradient_checkpointing:
+    enabled: true
+    strategy: "selective"   # Only checkpoint every N layers
+    checkpoint_ratio: 0.25  # Checkpoint 25% of layers
+    
+  cpu_offload:
+    enabled: false         # Not needed with 8x80GB
+    
+  optimizer_offload:
+    enabled: false         # Keep optimizer on GPU
+    
+  activation_checkpointing:
+    enabled: true
+    preserve_rng_state: false  # Faster but changes dropout
+
+# Distributed Training
+distributed:
+  backend: "nccl"
+  
+  # DeepSpeed Configuration
+  deepspeed:
+    enabled: true
+    config:
+      zero_optimization:
+        stage: 1           # Optimizer state sharding only
+        offload_optimizer:
+          device: "none"
+          pin_memory: false
+        offload_param:
+          device: "none"
+        overlap_comm: true
+        reduce_scatter: true
+        reduce_bucket_size: 5e8
+        allgather_bucket_size: 5e8
+        
+      gradient_accumulation_steps: "auto"
+      gradient_clipping: "auto"
+      
+      fp16:
+        enabled: false     # Using bf16 instead
+        
+      bf16:
+        enabled: true
+        
+      train_batch_size: "auto"
+      train_micro_batch_size_per_gpu: "auto"
+      
+      communication_data_type: "bf16"
+      prescale_gradients: false
+      
+  # Alternative: PyTorch FSDP
+  fsdp:
+    enabled: false         # Use DeepSpeed or FSDP, not both
+    sharding_strategy: "FULL_SHARD"
+    cpu_offload: false
+    mixed_precision: true
+    backward_prefetch: "BACKWARD_PRE"
+    forward_prefetch: true
+    limit_all_gathers: true
+    use_orig_params: true
+
+# Data Loading Optimizations
+data_loading:
+  num_workers: 4           # Per GPU
+  pin_memory: true
+  persistent_workers: true
+  prefetch_factor: 2
+  
+  # Dynamic batching
+  dynamic_batching:
+    enabled: true
+    bucket_boundaries: [256, 512, 1024, 2048]
+    bucket_batch_sizes: [64, 32, 16, 8]
+
+# Gradient Optimizations
+gradients:
+  # Gradient clipping
+  clip_type: "norm"        # or "value"
+  clip_value: 0.3          # Reduced for stability
+  
+  # Adaptive clipping
+  adaptive_clip:
+    enabled: true
+    algorithm: "agc"       # Adaptive Gradient Clipping
+    clip_factor: 0.01
+    
+  # Gradient accumulation
+  accumulation_steps: 2    # Effective batch = GPU_batch * 8 * 2
+  
+  # Gradient synchronization
+  sync_grad_before_step: true
+  
+# Optimizer Configuration
+optimizer:
+  type: "adamw"
+  
+  # 8-bit Adam (memory saving)
+  use_8bit: false          # Can enable for memory savings
+  
+  # Fused optimizer
+  fused: true              # Use apex FusedAdam
+  
+  # Adam parameters
+  betas: [0.9, 0.95]       # β2=0.95 for stability
+  eps: 1e-8
+  weight_decay: 0.1
+  
+  # Selective weight decay
+  no_decay_params: ["bias", "layer_norm", "layernorm"]
+  
+  # Optimizer states
+  amsgrad: false
+  adamw_mode: true
+  
+# Learning Rate Schedule
+learning_rate:
+  scheduler: "linear_with_warmup_decay_to_zero"  # D2Z beats cosine
+  
+  # Warmup
+  warmup_ratio: 0.02       # 2% of total steps
+  warmup_steps: null       # Or fixed number
+  
+  # Decay
+  decay_style: "linear"
+  min_lr_ratio: 0.1        # Final LR = 10% of max
+  
+# Sequence Length Curriculum
+sequence_curriculum:
+  enabled: true
+  strategy: "deepspeed"    # DeepSpeed's curriculum
+  
+  stages:
+    - {seq_len: 64,   batch_size: 128}
+    - {seq_len: 128,  batch_size: 96}
+    - {seq_len: 256,  batch_size: 64}
+    - {seq_len: 512,  batch_size: 48}
+    - {seq_len: 1024, batch_size: 32}
+    - {seq_len: 2048, batch_size: 16}
+    - {seq_len: 4096, batch_size: 8}
+    
+  transition_steps: 1000   # Steps to transition between stages
+
+# Monitoring and Logging
+monitoring:
+  gradient_norm_tracking: true
+  activation_checkpointing_stats: true
+  memory_profiling: false  # Enable for debugging
+  
+# Hardware-specific optimizations
+hardware:
+  # NVIDIA specific
+  cuda:
+    matmul_precision: "high"  # or "highest" for H100
+    allow_tf32: true
+    cudnn_benchmark: true
+    cudnn_deterministic: false
+    
+  # Tensor Core optimizations
+  tensor_cores:
+    enabled: true
+    force_fp16_accumulation: false
+    
+# Experimental optimizations (2024/2025)
+experimental:
+  # Ring Attention (for very long sequences)
+  ring_attention:
+    enabled: false
+    ring_size: 2
+    
+  # LOMO (Low-Memory Optimization)
+  lomo:
+    enabled: false
+    
+  # GaLore (Gradient Low-Rank Projection)
+  galore:
+    enabled: false
+    rank: 128
+    
+  # Speculative decoding (inference only)
+  speculative_decoding:
+    enabled: false
