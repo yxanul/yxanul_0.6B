@@ -53,33 +53,62 @@ def load_local_jsonl_files(data_dir: str, skip_first: bool = True) -> Dataset:
     """
     data_path = Path(data_dir)
     
-    # Find all JSONL files
-    jsonl_files = sorted(data_path.glob("wikipedia_2k_batch_*.jsonl"))
+    # Find all JSONL files - try different patterns
+    jsonl_files = list(data_path.glob("*.jsonl"))
     
+    if not jsonl_files:
+        print(f"No JSONL files found in {data_path}")
+        print(f"Contents of directory: {list(data_path.iterdir())[:5]}")
+        return None
+    
+    # Filter out batch_0000 if it exists
     if skip_first:
-        # Skip batch_0000.jsonl which has different columns (metadata)
-        jsonl_files = [f for f in jsonl_files if "batch_0000" not in f.name]
+        jsonl_files = [f for f in jsonl_files if "batch_0000" not in f.name and "batch_000.jsonl" not in f.name]
+    
+    # Sort the files
+    jsonl_files = sorted(jsonl_files)
     
     print(f"Found {len(jsonl_files)} JSONL files to load")
+    if len(jsonl_files) > 0:
+        print(f"First file: {jsonl_files[0].name}")
+        print(f"Last file: {jsonl_files[-1].name}")
     
     # Load all data into memory
     all_data = []
-    for file_path in tqdm(jsonl_files, desc="Loading files"):
-        with open(file_path, 'r', encoding='utf-8') as f:
-            for line in f:
-                try:
-                    data = json.loads(line)
-                    # Only keep the columns we need
-                    filtered_data = {
-                        'text': data.get('text', ''),
-                        'title': data.get('title', data.get('extracted_title', '')),
-                        'token_count': data.get('token_count', 0)
-                    }
-                    all_data.append(filtered_data)
-                except json.JSONDecodeError:
-                    continue
+    files_processed = 0
     
-    print(f"Loaded {len(all_data)} examples")
+    for file_path in tqdm(jsonl_files, desc="Loading files"):
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                file_lines = 0
+                for line in f:
+                    try:
+                        data = json.loads(line.strip())
+                        # Only keep the columns we need
+                        filtered_data = {
+                            'text': data.get('text', ''),
+                            'title': data.get('title', data.get('extracted_title', '')),
+                            'token_count': data.get('token_count', 0)
+                        }
+                        if filtered_data['text']:  # Only add if there's actual text
+                            all_data.append(filtered_data)
+                            file_lines += 1
+                    except (json.JSONDecodeError, KeyError) as e:
+                        continue
+                
+                if file_lines > 0:
+                    files_processed += 1
+                    
+        except Exception as e:
+            print(f"Error reading {file_path}: {e}")
+            continue
+    
+    print(f"Processed {files_processed} files")
+    print(f"Loaded {len(all_data)} examples total")
+    
+    if len(all_data) == 0:
+        print("WARNING: No data loaded! Check file format.")
+        return None
     
     # Create HuggingFace Dataset from the data
     dataset = Dataset.from_list(all_data)
@@ -135,6 +164,17 @@ def prepare_dataset_for_training(data_dir: str = "./data/wikipedia"):
     # Load the dataset from local files
     dataset = load_local_jsonl_files(data_dir)
     
+    # Check if dataset was loaded successfully
+    if dataset is None or len(dataset) == 0:
+        print("\nERROR: No data was loaded from the JSONL files!")
+        print("\nPossible issues:")
+        print("1. The JSONL files might be empty")
+        print("2. The files might have a different format than expected")
+        print("3. The 'text' field might be missing from the files")
+        print("\nTry checking a sample file:")
+        print(f"  head -1 {data_dir}/*.jsonl | python -m json.tool")
+        return None
+    
     # Create train/val split
     dataset_dict = create_train_val_split(dataset)
     
@@ -142,10 +182,15 @@ def prepare_dataset_for_training(data_dir: str = "./data/wikipedia"):
     print(f"Train examples: {len(dataset_dict['train'])}")
     print(f"Validation examples: {len(dataset_dict['validation'])}")
     
-    # Save to disk for faster loading next time
-    cache_dir = Path("./data/processed_dataset")
-    dataset_dict.save_to_disk(cache_dir)
-    print(f"\nDataset saved to {cache_dir} for faster loading")
+    # Only save if we have data
+    if len(dataset_dict['train']) > 0:
+        # Save to disk for faster loading next time
+        cache_dir = Path("./data/processed_dataset")
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        dataset_dict.save_to_disk(cache_dir)
+        print(f"\nDataset saved to {cache_dir} for faster loading")
+    else:
+        print("\nWARNING: Dataset is empty, not saving to disk")
     
     return dataset_dict
 
