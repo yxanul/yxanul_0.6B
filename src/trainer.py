@@ -77,6 +77,9 @@ class OptimizedTrainer:
         # Apply optimizations
         self._apply_optimizations()
         
+        # Initialize total_steps before scheduler setup
+        self.total_steps = 0
+        
         # Setup optimizer and scheduler
         self._setup_optimizer()
         self._setup_scheduler()
@@ -277,13 +280,13 @@ class OptimizedTrainer:
             # Will be set when dataloader is created
             self.total_steps = 100000  # Temporary default
         
-        warmup_steps = train_config.get("warmup_steps", 2000)
+        warmup_steps = int(train_config.get("warmup_steps", 2000))
         
         # Linear schedule with warmup and decay to zero
         self.scheduler = get_linear_schedule_with_warmup(
             self.optimizer,
             num_warmup_steps=warmup_steps,
-            num_training_steps=self.total_steps
+            num_training_steps=int(self.total_steps)
         )
         
     def _setup_mixed_precision(self):
@@ -304,7 +307,7 @@ class OptimizedTrainer:
                 fp8_config = mp_config.get("fp8_config", {})
                 self.fp8_enabled = fp8_config.get("enabled", True)
                 self.fp8_format = fp8_config.get("format", "e4m3")
-                self.fp8_amax_history_len = fp8_config.get("amax_history_len", 1024)
+                self.fp8_amax_history_len = int(fp8_config.get("amax_history_len", 1024))
                 self.fp8_amax_compute_algo = fp8_config.get("amax_compute_algo", "most_recent")
                 
                 # Apply FP8 to model
@@ -482,8 +485,8 @@ class OptimizedTrainer:
         
         # Get dataset info
         dataset_name = data_config.get("dataset_name", "Yxanul/wikipedia-2k-high-quality")
-        batch_size = train_config["training"].get("batch_size", 8)
-        max_length = train_config["training"].get("max_sequence_length", 2048)
+        batch_size = int(train_config["training"].get("batch_size", 8))
+        max_length = int(train_config["training"].get("max_sequence_length", 2048))
         
         # Estimate dataset size
         self.dataset_size = estimate_dataset_size(dataset_name)
@@ -520,7 +523,7 @@ class OptimizedTrainer:
             self.val_dataset = None
         
         # Calculate total training steps
-        gradient_accumulation = train_config["training"].get("gradient_accumulation_steps", 1)
+        gradient_accumulation = int(train_config["training"].get("gradient_accumulation_steps", 1))
         self.total_steps = calculate_training_steps(
             dataset_size=self.dataset_size,
             batch_size=batch_size,
