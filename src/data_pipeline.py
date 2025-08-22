@@ -86,7 +86,7 @@ class StreamingDataset(IterableDataset):
             jsonl_files = sorted(local_raw_path.glob("wikipedia_2k_batch_*.jsonl"))
             jsonl_files = [f for f in jsonl_files if "batch_0000" not in f.name]
             
-            for file_path in jsonl_files[:10]:  # Load first 10 for testing
+            for file_path in jsonl_files:  # Load all files
                 with open(file_path, 'r', encoding='utf-8') as f:
                     for line in f:
                         try:
