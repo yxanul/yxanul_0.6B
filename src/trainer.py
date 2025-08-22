@@ -455,9 +455,7 @@ class OptimizedTrainer:
         for step, batch in enumerate(progress_bar):
             # Update sequence length curriculum if applicable
             if hasattr(self.train_dataset, 'update_sequence_length'):
-                # For streaming datasets, use estimated steps per epoch
-                estimated_steps = getattr(self, 'estimated_steps_per_epoch', 1000)
-                current_step = epoch * estimated_steps + step
+                current_step = epoch * len(dataloader) + step
                 new_seq_len = self.train_dataset.update_sequence_length(current_step, self.total_steps)
                 if self.local_rank == 0 and step % 100 == 0:
                     print(f"Sequence length updated to: {new_seq_len}")
@@ -697,7 +695,7 @@ def main():
         epoch_metrics = trainer.train_epoch(trainer.train_dataloader, epoch + 1)
         
         # Validation
-        if trainer.val_dataloader:
+        if trainer.val_dataloader is not None:
             perplexity = trainer.validate()
             if perplexity:
                 print(f"Validation Perplexity: {perplexity:.2f}")

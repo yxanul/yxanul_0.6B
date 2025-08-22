@@ -44,18 +44,27 @@ class StreamingDataset(IterableDataset):
         self.target_seq_length = max_length
         self.curriculum_stages = training_config.get("curriculum_stages", [])
         
-    def __iter__(self) -> Iterator[Dict[str, torch.Tensor]]:
-        """Iterate through the dataset with streaming."""
-        # Load dataset with streaming
-        dataset = load_dataset(
+        # Load the dataset (will download and cache on first run)
+        print(f"Loading dataset: {self.dataset_name} (split: {self.split})")
+        self.dataset = load_dataset(
             self.dataset_name,
             split=self.split,
-            streaming=True
+            streaming=False  # Download the full dataset
         )
+        print(f"Dataset loaded: {len(self.dataset)} examples")
         
+    def __len__(self):
+        """Return estimated number of chunks."""
+        # Rough estimate: ~2 chunks per document
+        return len(self.dataset) * 2
+        
+    def __iter__(self) -> Iterator[Dict[str, torch.Tensor]]:
+        """Iterate through the dataset."""
         # Shuffle if in training mode
-        if self.split == "train":
-            dataset = dataset.shuffle(buffer_size=10000, seed=42)
+        if "train" in self.split:
+            dataset = self.dataset.shuffle(seed=42)
+        else:
+            dataset = self.dataset
         
         # Process each example
         buffer = []
@@ -71,11 +80,10 @@ class StreamingDataset(IterableDataset):
                 # Skip if no text field found
                 continue
                 
-            # Tokenize with truncation to model's max length
+            # Tokenize without truncation (we handle chunking ourselves)
             tokens = self.tokenizer(
                 text,
-                truncation=True,
-                max_length=self.max_length,
+                truncation=False,
                 add_special_tokens=True,
                 return_attention_mask=False
             )["input_ids"]

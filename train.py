@@ -240,11 +240,9 @@ def main():
             
             # Update sequence length for curriculum learning
             if hasattr(train_dataset, 'update_sequence_length'):
-                # For streaming datasets, estimate total steps based on expected dataset size
-                # Using a reasonable estimate since we can't get exact length from streaming dataset
-                estimated_steps_per_epoch = training_config.get('training', {}).get('estimated_steps_per_epoch', 1000)
-                total_steps_estimate = num_epochs * estimated_steps_per_epoch
-                new_seq_len = train_dataset.update_sequence_length(global_step, total_steps_estimate)
+                # Now we can get the actual length since we're not streaming
+                total_steps = num_epochs * len(train_dataloader)
+                new_seq_len = train_dataset.update_sequence_length(global_step, total_steps)
                 if new_seq_len != train_dataset.current_seq_length and rank == 0:
                     print(f"  Updated sequence length to {new_seq_len}")
         
