@@ -46,12 +46,30 @@ class StreamingDataset(IterableDataset):
         
         # Load the dataset (will download and cache on first run)
         print(f"Loading dataset: {self.dataset_name} (split: {self.split})")
-        self.dataset = load_dataset(
-            self.dataset_name,
-            split=self.split,
-            streaming=False  # Download the full dataset
-        )
-        print(f"Dataset loaded: {len(self.dataset)} examples")
+        
+        # Try loading with better error handling for rate limits
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                self.dataset = load_dataset(
+                    self.dataset_name,
+                    split=self.split,
+                    streaming=False,  # Download the full dataset
+                    num_proc=1  # Single process to avoid rate limits
+                )
+                print(f"Dataset loaded: {len(self.dataset)} examples")
+                break
+            except Exception as e:
+                if "429" in str(e) and attempt < max_retries - 1:
+                    wait_time = 30 * (attempt + 1)  # 30s, 60s, 90s
+                    print(f"Rate limited. Waiting {wait_time}s before retry...")
+                    import time
+                    time.sleep(wait_time)
+                else:
+                    print(f"Error loading dataset: {e}")
+                    print("\nPlease run 'python download_dataset.py' first to download the dataset")
+                    print("This will handle rate limits better than the default loader")
+                    raise
         
     def __len__(self):
         """Return estimated number of chunks."""
