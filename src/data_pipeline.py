@@ -50,8 +50,7 @@ class StreamingDataset(IterableDataset):
         dataset = load_dataset(
             self.dataset_name,
             split=self.split,
-            streaming=True,
-            trust_remote_code=True
+            streaming=True
         )
         
         # Shuffle if in training mode
@@ -72,10 +71,11 @@ class StreamingDataset(IterableDataset):
                 # Skip if no text field found
                 continue
                 
-            # Tokenize
+            # Tokenize with truncation to model's max length
             tokens = self.tokenizer(
                 text,
-                truncation=False,
+                truncation=True,
+                max_length=self.max_length,
                 add_special_tokens=True,
                 return_attention_mask=False
             )["input_ids"]

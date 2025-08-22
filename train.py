@@ -7,6 +7,8 @@ Supports single GPU (RTX 4090) and multi-GPU training.
 import os
 import sys
 import torch
+import torch._dynamo
+torch._dynamo.config.suppress_errors = True  # Suppress Dynamo errors for WandB compatibility
 import yaml
 import argparse
 from pathlib import Path
