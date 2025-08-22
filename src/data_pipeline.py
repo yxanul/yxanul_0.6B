@@ -10,6 +10,7 @@ from transformers import GPT2Tokenizer
 import numpy as np
 from typing import Dict, Optional, Iterator
 import random
+from pathlib import Path
 
 # Maximum buffer size to prevent memory leaks
 MAX_BUFFER_SIZE = 100000  # Prevent OOM with very long documents
@@ -44,32 +45,89 @@ class StreamingDataset(IterableDataset):
         self.target_seq_length = max_length
         self.curriculum_stages = training_config.get("curriculum_stages", [])
         
-        # Load the dataset (will download and cache on first run)
+        # Load the dataset - try local first, then HuggingFace
         print(f"Loading dataset: {self.dataset_name} (split: {self.split})")
         
-        # Try loading with better error handling for rate limits
-        max_retries = 3
-        for attempt in range(max_retries):
+        # Check for local preprocessed dataset first
+        local_dataset_path = Path("./data/processed_dataset")
+        local_raw_path = Path("./data/wikipedia")
+        
+        if local_dataset_path.exists():
+            # Load preprocessed dataset from disk
+            print(f"Loading preprocessed dataset from {local_dataset_path}")
+            from datasets import load_from_disk
+            dataset_dict = load_from_disk(local_dataset_path)
+            
+            # Handle split selection
+            if "train[" in self.split:
+                # Parse percentage split like "train[95%:]"
+                import re
+                match = re.match(r"train\[(\d+)%:\]", self.split)
+                if match:
+                    start_pct = int(match.group(1))
+                    split_idx = int(len(dataset_dict['train']) * (start_pct / 100))
+                    self.dataset = dataset_dict['train'].select(range(split_idx, len(dataset_dict['train'])))
+                else:
+                    self.dataset = dataset_dict['train']
+            elif self.split in dataset_dict:
+                self.dataset = dataset_dict[self.split]
+            else:
+                self.dataset = dataset_dict['train']
+            print(f"Dataset loaded from local: {len(self.dataset)} examples")
+            
+        elif local_raw_path.exists():
+            # Load from raw JSONL files
+            print(f"Loading raw JSONL files from {local_raw_path}")
+            import json
+            from datasets import Dataset
+            
+            # Load all JSONL files except batch_0000 (metadata)
+            all_data = []
+            jsonl_files = sorted(local_raw_path.glob("wikipedia_2k_batch_*.jsonl"))
+            jsonl_files = [f for f in jsonl_files if "batch_0000" not in f.name]
+            
+            for file_path in jsonl_files[:10]:  # Load first 10 for testing
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    for line in f:
+                        try:
+                            data = json.loads(line)
+                            all_data.append({
+                                'text': data.get('text', ''),
+                                'title': data.get('title', ''),
+                                'token_count': data.get('token_count', 0)
+                            })
+                        except:
+                            continue
+            
+            self.dataset = Dataset.from_list(all_data)
+            print(f"Dataset loaded from JSONL: {len(self.dataset)} examples")
+            
+        else:
+            # Fallback to HuggingFace (with rate limit handling)
+            print("Local dataset not found. Attempting to download from HuggingFace...")
+            print("This may fail due to rate limits. Consider running:")
+            print("  git clone https://huggingface.co/datasets/Yxanul/wikipedia-2k-high-quality ./data/wikipedia")
+            print("  python download_and_prepare_dataset.py")
+            
             try:
                 self.dataset = load_dataset(
                     self.dataset_name,
                     split=self.split,
-                    streaming=False,  # Download the full dataset
-                    num_proc=1  # Single process to avoid rate limits
+                    streaming=False,
+                    num_proc=1
                 )
                 print(f"Dataset loaded: {len(self.dataset)} examples")
-                break
             except Exception as e:
-                if "429" in str(e) and attempt < max_retries - 1:
-                    wait_time = 30 * (attempt + 1)  # 30s, 60s, 90s
-                    print(f"Rate limited. Waiting {wait_time}s before retry...")
-                    import time
-                    time.sleep(wait_time)
-                else:
-                    print(f"Error loading dataset: {e}")
-                    print("\nPlease run 'python download_dataset.py' first to download the dataset")
-                    print("This will handle rate limits better than the default loader")
-                    raise
+                print(f"\nError: {e}")
+                print("\n" + "=" * 60)
+                print("SOLUTION: Download the dataset locally first:")
+                print("=" * 60)
+                print("Run this command:")
+                print(f"  git clone https://huggingface.co/datasets/{self.dataset_name} ./data/wikipedia")
+                print("\nThen run:")
+                print("  python download_and_prepare_dataset.py")
+                print("=" * 60)
+                raise
         
     def __len__(self):
         """Return estimated number of chunks."""
