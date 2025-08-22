@@ -19,6 +19,7 @@ class EnhancedTrainer(OptimizedTrainer):
     
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.global_step = 0  # Initialize global step counter
         self.activation_stats = {}
         self.register_hooks()
     

@@ -516,6 +516,18 @@ class YxanulForCausalLM(nn.Module):
             self.tie_weights()
         else:
             self.lm_head = None
+    
+    def gradient_checkpointing_enable(self):
+        """Enable gradient checkpointing for memory efficiency."""
+        self.config.use_gradient_checkpointing = True
+        if hasattr(self.model, 'config'):
+            self.model.config.use_gradient_checkpointing = True
+    
+    def gradient_checkpointing_disable(self):
+        """Disable gradient checkpointing."""
+        self.config.use_gradient_checkpointing = False
+        if hasattr(self.model, 'config'):
+            self.model.config.use_gradient_checkpointing = False
         
     def forward(
         self,

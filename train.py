@@ -131,8 +131,8 @@ def main():
     
     trainer = EnhancedTrainer(
         model=model,
-        config_path=args.config,
-        stage='stage1',
+        config_path="configs",
+        stage="stage1_rtx4090",
         local_rank=args.local_rank
     )
     
@@ -262,6 +262,7 @@ def main():
     
     # Final checkpoint
     if rank == 0:
+        os.makedirs("checkpoints", exist_ok=True)
         final_checkpoint = "checkpoints/final_model.pt"
         trainer.save_checkpoint(final_checkpoint, epoch=num_epochs)
         print(f"\n[Training Complete] Final model saved to {final_checkpoint}")
