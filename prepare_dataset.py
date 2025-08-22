@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 """
-Download and prepare the Wikipedia dataset properly.
-This avoids rate limits and column mismatch issues.
+Prepare the Wikipedia dataset for training.
+
+IMPORTANT: You must first clone the dataset using git:
+  git clone https://huggingface.co/datasets/Yxanul/wikipedia-2k-high-quality ./data/wikipedia
+
+This script then processes the JSONL files into a format optimized for training.
 """
 
 import os

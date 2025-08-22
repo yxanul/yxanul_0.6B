@@ -232,13 +232,21 @@ class EnhancedTrainer(OptimizedTrainer):
         # Post-step metrics
         step_time = time.time() - start_time
         
-        # Token counting
+        # Token counting - Fixed calculation
         if hasattr(self.tokenizer, 'pad_token_id'):
             actual_tokens = (input_ids != self.tokenizer.pad_token_id).sum().item()
         else:
             actual_tokens = batch_size * seq_len
         
-        tokens_processed = actual_tokens * self.world_size
+        # Don't multiply by world_size for single GPU!
+        # Only multiply if we're actually doing distributed training
+        if self.world_size > 1:
+            tokens_processed = actual_tokens * self.world_size
+        else:
+            tokens_processed = actual_tokens
+            
+        # Also don't count gradient accumulation steps multiple times
+        # tokens_per_second should be actual tokens processed per wall-clock second
         tokens_per_second = tokens_processed / step_time if step_time > 0 else 0
         
         # Memory after step (GPU only)
@@ -287,9 +295,10 @@ class EnhancedTrainer(OptimizedTrainer):
             
             # Data metrics
             "data/batch_size": batch_size,
-            "data/sequence_length": seq_len,
+            "data/sequence_length": seq_len,  # This is the ACTUAL seq length from curriculum
             "data/actual_tokens": actual_tokens,
             "data/padding_ratio": 1 - (actual_tokens / (batch_size * seq_len)),
+            "data/curriculum_seq_len": seq_len,  # Explicit curriculum tracking
             
             # Model state
             "model/num_parameters": sum(p.numel() for p in self.model.parameters()),

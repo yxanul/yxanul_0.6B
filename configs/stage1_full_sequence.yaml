@@ -1,0 +1,94 @@
+# Stage 1B: Full Sequence Training (After Curriculum)
+# Use this AFTER completing curriculum training (stage1_curriculum_optimized.yaml)
+
+stage:
+  name: "wikipedia_deep_learning"
+  description: "Deep learning on Wikipedia with full sequences"
+  
+data:
+  dataset_name: "Yxanul/wikipedia-2k-high-quality"
+  dataset_split: "train"
+  streaming: false
+  
+  # Fixed sequence length (choose based on needs)
+  max_sequence_length: 2048  # Or 1024 for faster training
+  stride: 1024  # 50% overlap
+  
+  tokenizer: "gpt2"
+  
+training:
+  # Duration (multiple epochs)
+  num_epochs: 5  # 5 more epochs after curriculum
+  max_steps: -1  # Train for full epochs
+  
+  # Fixed batch size (no curriculum)
+  per_device_train_batch_size: 8   # For 2048 tokens
+  # per_device_train_batch_size: 16  # For 1024 tokens
+  gradient_accumulation_steps: 4  # Effective batch = 32
+  
+  # Learning rate (lower after curriculum)
+  learning_rate: 2e-4      # Lower than curriculum peak
+  min_learning_rate: 2e-5  # 10% of peak
+  lr_scheduler_type: "cosine"
+  warmup_steps: 500  # Short warmup from checkpoint
+  
+  # NO curriculum
+  use_curriculum: false
+  
+  # Optimizer (same as before)
+  optimizer: "adamw"
+  adam_beta1: 0.9
+  adam_beta2: 0.95
+  adam_epsilon: 1e-8
+  weight_decay: 0.1
+  
+  # Gradient clipping
+  max_grad_norm: 0.5  # Tighter for stability
+  
+  # Mixed precision
+  fp16: false
+  bf16: true
+  
+  # Checkpointing
+  save_strategy: "steps"
+  save_steps: 10000
+  save_total_limit: 3
+  
+  # Evaluation
+  evaluation_strategy: "steps"
+  eval_steps: 2000
+  
+  # Early stopping
+  early_stopping_patience: 10
+  early_stopping_threshold: 0.001
+  
+  # Logging
+  logging_steps: 100
+  report_to: ["wandb"]
+  
+  # Load from curriculum checkpoint
+  resume_from_checkpoint: "checkpoints/checkpoint_step50000.pt"
+  
+validation:
+  validation_split: 0.05
+  per_device_eval_batch_size: 8
+  
+expected_results:
+  # After 5 more epochs (starting from PPL ~35)
+  epoch_2_perplexity: "~30"
+  epoch_3_perplexity: "~26"
+  epoch_4_perplexity: "~23"
+  epoch_5_perplexity: "~21"
+  final_perplexity: "~20"
+  
+  # Timing (2048 tokens, batch=8, grad_accum=4)
+  tokens_per_second: "~8,000"
+  time_per_epoch: "~15 hours"
+  total_time: "~75 hours for 5 epochs"
+  
+notes:
+  - "Curriculum already taught basics, now deepen knowledge"
+  - "Full sequences capture long-range dependencies"
+  - "Lower LR prevents forgetting curriculum learning"
+  - "Can stop early if validation plateaus"
+  - "Consider 1024 tokens for 2x speed if 2048 too slow"

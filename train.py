@@ -169,9 +169,10 @@ def main():
     
     # Training parameters
     num_epochs = training_config.get('training', {}).get('num_train_epochs', 1)
-    checkpoint_steps = training_config.get('training', {}).get('save_steps', 5000)
+    checkpoint_steps = training_config.get('training', {}).get('save_steps', 10000)  # Changed from 5000
     eval_steps = training_config.get('training', {}).get('eval_steps', 1000)
     logging_steps = training_config.get('training', {}).get('logging_steps', 10)
+    save_total_limit = training_config.get('training', {}).get('save_total_limit', 3)  # Only keep last 3 checkpoints
     
     # Initialize WandB
     if rank == 0:
@@ -231,20 +232,31 @@ def main():
                     print(f"  Validation perplexity: {val_ppl:.2f}")
                 model.train()
             
-            # Checkpointing
+            # Checkpointing with cleanup
             if global_step % checkpoint_steps == 0 and rank == 0:
                 checkpoint_path = f"checkpoints/checkpoint_epoch{epoch}_step{global_step}.pt"
                 os.makedirs("checkpoints", exist_ok=True)
                 trainer.save_checkpoint(checkpoint_path, epoch=epoch)
                 print(f"  Checkpoint saved to {checkpoint_path}")
+                
+                # Clean up old checkpoints to save disk space
+                import glob
+                checkpoints = sorted(glob.glob("checkpoints/checkpoint_*.pt"))
+                if len(checkpoints) > save_total_limit:
+                    for old_checkpoint in checkpoints[:-save_total_limit]:
+                        os.remove(old_checkpoint)
+                        print(f"  Removed old checkpoint: {old_checkpoint}")
             
             # Update sequence length for curriculum learning
             if hasattr(train_dataset, 'update_sequence_length'):
                 # Now we can get the actual length since we're not streaming
                 total_steps = num_epochs * len(train_dataloader)
+                old_seq_len = train_dataset.current_seq_length
                 new_seq_len = train_dataset.update_sequence_length(global_step, total_steps)
-                if new_seq_len != train_dataset.current_seq_length and rank == 0:
-                    print(f"  Updated sequence length to {new_seq_len}")
+                if new_seq_len != old_seq_len and rank == 0:
+                    batch_size_curr = training_config.get('training', {}).get('per_device_train_batch_size', 32)
+                    print(f"\n  [CURRICULUM] Sequence length updated: {old_seq_len} → {new_seq_len}")
+                    print(f"  [CURRICULUM] Tokens/batch will change: {old_seq_len * batch_size_curr} → {new_seq_len * batch_size_curr}")
         
         # Epoch summary
         if rank == 0:

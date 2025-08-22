@@ -71,15 +71,18 @@ pip install flash-attn --no-build-isolation
 
 # Optional: Install Transformer Engine for FP8 (H100 only)
 pip install transformer-engine
+
+# IMPORTANT: Download the dataset using git (avoids rate limits)
+git clone https://huggingface.co/datasets/Yxanul/wikipedia-2k-high-quality ./data/wikipedia
+
+# Prepare dataset for training (creates train/val splits)
+python prepare_dataset.py
 ```
 
 ## 🏃 Training
 
 ### Quick Start (RTX 4090 - 24GB VRAM):
 ```bash
-# Test memory usage first
-python test_memory_rtx4090.py
-
 # Train with RTX 4090 optimized config
 python train.py --config configs/stage1_rtx4090.yaml
 

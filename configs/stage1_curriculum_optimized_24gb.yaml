@@ -1,0 +1,124 @@
+# Optimized Curriculum Learning Configuration for 24GB VRAM
+# Targets 20-22GB VRAM usage (safe margin from 24GB limit)
+# ~24,000-26,000 tokens per batch (1.5x increase from original)
+
+stage:
+  name: "wikipedia_foundation_curriculum_24gb"
+  description: "Aggressive curriculum learning: 64→2048 tokens, optimized for RTX 4090"
+  
+data:
+  dataset_name: "Yxanul/wikipedia-2k-high-quality"
+  dataset_split: "train"
+  streaming: false  # Use local downloaded data
+  
+  # Maximum sequence length for final stages
+  max_sequence_length: 2048
+  stride: 1024  # 50% overlap
+  
+  tokenizer: "gpt2"
+  group_by_length: false  # Disable for curriculum
+  
+training:
+  # Duration
+  num_epochs: 1
+  max_steps: 100000  # Fixed steps for fair comparison
+  
+  # Base configuration (will be overridden by curriculum)
+  per_device_train_batch_size: 32
+  gradient_accumulation_steps: 1
+  
+  # Learning rate (scales with effective batch size)
+  learning_rate: 6e-4      # Base LR (will be scaled)
+  min_learning_rate: 6e-5  # 10% of peak
+  lr_scheduler_type: "cosine"
+  warmup_steps: 500  # Adaptive per stage
+  
+  # Aggressive Curriculum with ~24-26k tokens per batch
+  use_curriculum: true
+  curriculum_stages:
+    # Phase 1: Token relationships (8k steps, 3M+ examples!)
+    - {step: 0,     seq_len: 64,   batch_size: 384, lr_scale: 13.5, warmup: 500, grad_clip: 5.0}  # 24,576 tokens
+    - {step: 2000,  seq_len: 128,  batch_size: 192, lr_scale: 8.5,  warmup: 300, grad_clip: 2.0}  # 24,576 tokens
+    - {step: 4000,  seq_len: 256,  batch_size: 96,  lr_scale: 4.5,  warmup: 200, grad_clip: 1.0}  # 24,576 tokens
+    
+    # Phase 2: Sentence structure
+    - {step: 8000,  seq_len: 512,  batch_size: 48,  lr_scale: 2.0,  warmup: 100, grad_clip: 0.5}  # 24,576 tokens
+    - {step: 12000, seq_len: 768,  batch_size: 32,  lr_scale: 1.3,  warmup: 100, grad_clip: 0.4}  # 24,576 tokens
+    
+    # Phase 3: Document understanding  
+    - {step: 18000, seq_len: 1024, batch_size: 24,  lr_scale: 0.9,  warmup: 100, grad_clip: 0.3}  # 24,576 tokens
+    - {step: 25000, seq_len: 1536, batch_size: 16,  lr_scale: 0.6,  warmup: 100, grad_clip: 0.3}  # 24,576 tokens
+    
+    # Phase 4: Deep mastery (slightly higher for efficiency)
+    - {step: 35000, seq_len: 2048, batch_size: 12,  lr_scale: 0.45, warmup: 100, grad_clip: 0.3}  # 24,576 tokens
+    - {step: 50000, seq_len: 2048, batch_size: 13,  lr_scale: 0.35, warmup: 50,  grad_clip: 0.3}  # 26,624 tokens
+  
+  # Memory calculation (RTX 4090 24GB):
+  # All stages: ~24,576-26,624 tokens per batch
+  # Memory usage: batch_size * seq_len * 768 * 4 bytes ≈ 20-22GB peak
+  # Safe margin: 2-4GB for gradients and optimizer states
+  
+  # Optimizer
+  optimizer: "adamw"
+  adam_beta1: 0.9
+  adam_beta2: 0.95
+  adam_epsilon: 1e-8
+  weight_decay: 0.1
+  
+  # Gradient clipping
+  max_grad_norm: 1.0  # Default, overridden per stage
+  
+  # Mixed precision
+  fp16: false
+  bf16: true  # BF16 is more stable for large batches
+  
+  # Checkpointing
+  save_strategy: "steps"
+  save_steps: 10000
+  save_total_limit: 3
+  
+  # Evaluation
+  evaluation_strategy: "steps"
+  eval_steps: 2000
+  
+  # Logging
+  logging_steps: 100
+  logging_first_step: true
+  report_to: ["wandb"]
+  
+  # Seed
+  seed: 42
+  
+validation:
+  validation_split: 0.05
+  per_device_eval_batch_size: 24  # Also increased for validation
+  
+expected_results:
+  # With 1.5x larger batches
+  steps_to_perplexity_100: "~12,000"  # Even faster than before
+  steps_to_perplexity_50: "~22,000"   
+  steps_to_perplexity_30: "~35,000"   
+  
+  # Speed improvements
+  examples_seen_at_10k_steps: "3,000,000"  # 50% more than original
+  wall_clock_speedup: "3-4x"
+  
+  # Per stage metrics (with higher batch sizes)
+  stage_64_tokens_per_sec: "~24,000"   # 1.5x improvement
+  stage_256_tokens_per_sec: "~21,000"  
+  stage_512_tokens_per_sec: "~18,000"  
+  stage_1024_tokens_per_sec: "~15,000" 
+  stage_2048_tokens_per_sec: "~12,000" 
+  
+memory_safety:
+  - "Monitor GPU memory in first 100 steps of each stage"
+  - "If OOM at 2048 tokens, reduce batch from 12 to 11"
+  - "BF16 saves ~15% memory vs FP32"
+  - "Gradient checkpointing available if needed (add gradient_checkpointing: true)"
+  
+notes:
+  - "1.5x larger batches = 1.5x more examples per step"
+  - "Constant 24.5k tokens/batch maximizes RTX 4090 usage"
+  - "Higher LR scales (up to 13.5x) for larger batches"
+  - "Watch for OOM in stages 8-9 (2048 tokens)"
+  - "Can reduce final batch to 11 if memory issues"
