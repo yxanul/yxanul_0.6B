@@ -151,8 +151,11 @@ class OptimizedTrainer:
                 }
             )
             
-            # Watch the model
-            wandb.watch(self.model, log="gradients", log_freq=100)
+            # Watch the model (skip if torch.compile is enabled)
+            if not self.config.get('optimization', {}).get('torch_compile', {}).get('enabled', False):
+                wandb.watch(self.model, log="gradients", log_freq=100)
+            else:
+                print("Skipping wandb.watch() due to torch.compile compatibility")
             print("WandB initialized successfully")
             
         except ImportError:

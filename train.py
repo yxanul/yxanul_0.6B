@@ -6,6 +6,11 @@ Supports single GPU (RTX 4090) and multi-GPU training.
 
 import os
 import sys
+
+# Disable WandB's automatic torch hooks before importing torch
+os.environ["WANDB_DISABLE_SERVICE"] = "true"
+os.environ["WANDB__REQUIRE_SERVICE"] = "false"
+
 import torch
 import torch._dynamo
 torch._dynamo.config.suppress_errors = True  # Suppress Dynamo errors for WandB compatibility

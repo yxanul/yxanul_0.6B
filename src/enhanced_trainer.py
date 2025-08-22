@@ -106,8 +106,11 @@ class EnhancedTrainer(OptimizedTrainer):
             wandb.define_metric("perf/tokens_per_second", summary="mean")
             wandb.define_metric("memory/allocated_gb", summary="max")
             
-            # Watch model with detailed gradients
-            wandb.watch(self.model, log="all", log_freq=100, log_graph=True)
+            # Watch model with detailed gradients (skip if torch.compile is enabled)
+            if not self.config.get('optimization', {}).get('torch_compile', {}).get('enabled', False):
+                wandb.watch(self.model, log="all", log_freq=100, log_graph=True)
+            else:
+                print("    Skipping wandb.watch() due to torch.compile compatibility")
             
             print(f"[OK] WandB initialized with comprehensive monitoring")
             print(f"    Project: {project_name}")
