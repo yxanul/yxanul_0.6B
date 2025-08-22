@@ -216,7 +216,7 @@ def main():
                     pass
             
             # Validation
-            if val_dataloader and global_step % eval_steps == 0:
+            if val_dataloader is not None and global_step % eval_steps == 0:
                 if rank == 0:
                     print(f"\n  Running validation at step {global_step}...")
                 val_ppl = trainer.validate(val_dataloader, max_batches=50)
@@ -248,7 +248,7 @@ def main():
                 'total_tokens': epoch_tokens,
             }
             
-            if val_dataloader:
+            if val_dataloader is not None:
                 val_ppl = trainer.validate(val_dataloader)
                 if val_ppl:
                     epoch_metrics['val_perplexity'] = val_ppl
