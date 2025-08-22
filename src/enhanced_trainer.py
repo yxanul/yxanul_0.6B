@@ -25,17 +25,24 @@ class EnhancedTrainer(OptimizedTrainer):
     
     def register_hooks(self):
         """Register hooks for activation monitoring."""
+        # Skip hooks if torch.compile is enabled (incompatible with .item())
+        if hasattr(self, 'config') and self.config.get('optimization', {}).get('torch_compile', {}).get('enabled', False):
+            print("Skipping activation hooks (incompatible with torch.compile)")
+            return
+            
         # Track key layer activations
         def hook_fn(name):
             def hook(module, input, output):
                 if self.global_step % 500 == 0:  # Only track every 500 steps
                     if isinstance(output, torch.Tensor):
-                        self.activation_stats[name] = {
-                            'mean': output.detach().mean().item(),
-                            'std': output.detach().std().item(),
-                            'max': output.detach().max().item(),
-                            'min': output.detach().min().item(),
-                        }
+                        # Use torch.no_grad() to avoid graph issues
+                        with torch.no_grad():
+                            self.activation_stats[name] = {
+                                'mean': output.detach().mean().item(),
+                                'std': output.detach().std().item(),
+                                'max': output.detach().max().item(),
+                                'min': output.detach().min().item(),
+                            }
             return hook
         
         # Register hooks for important layers

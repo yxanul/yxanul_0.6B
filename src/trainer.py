@@ -328,12 +328,18 @@ class OptimizedTrainer:
                 self.use_amp = True
                 self.amp_dtype = torch.bfloat16
                 self.scaler = None  # BF16 doesn't need loss scaling
+                # Convert model to bf16 for Flash Attention
+                self.model = self.model.to(torch.bfloat16)
+                print("Model converted to BF16 dtype")
             else:
                 print("Using FP16 mixed precision")
                 self.use_fp8 = False
                 self.use_amp = True
                 self.amp_dtype = torch.float16
                 self.scaler = GradScaler()
+                # Convert model to fp16 for Flash Attention
+                self.model = self.model.to(torch.float16)
+                print("Model converted to FP16 dtype")
         else:
             self.use_fp8 = False
             self.use_amp = False
