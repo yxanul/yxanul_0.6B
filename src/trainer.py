@@ -233,7 +233,7 @@ class OptimizedTrainer:
             {
                 "params": [p for n, p in self.model.named_parameters() 
                           if not any(nd in n.lower() for nd in no_decay)],
-                "weight_decay": opt_config.get("weight_decay", 0.1),
+                "weight_decay": float(opt_config.get("weight_decay", 0.1)),
             },
             {
                 "params": [p for n, p in self.model.named_parameters() 
@@ -247,25 +247,25 @@ class OptimizedTrainer:
             print("Using FusedAdam optimizer...")
             self.optimizer = FusedAdam(
                 optimizer_grouped_parameters,
-                lr=train_config.get("learning_rate", 2e-4),
+                lr=float(train_config.get("learning_rate", 2e-4)),
                 betas=tuple(opt_config.get("betas", [0.9, 0.95])),
-                eps=opt_config.get("eps", 1e-8)
+                eps=float(opt_config.get("eps", 1e-8))
             )
         elif opt_config.get("use_8bit", False) and BNB_AVAILABLE:
             print("Using 8-bit Adam optimizer...")
             self.optimizer = bnb.optim.Adam8bit(
                 optimizer_grouped_parameters,
-                lr=train_config.get("learning_rate", 2e-4),
+                lr=float(train_config.get("learning_rate", 2e-4)),
                 betas=tuple(opt_config.get("betas", [0.9, 0.95])),
-                eps=opt_config.get("eps", 1e-8)
+                eps=float(opt_config.get("eps", 1e-8))
             )
         else:
             print("Using standard AdamW optimizer...")
             self.optimizer = torch.optim.AdamW(
                 optimizer_grouped_parameters,
-                lr=train_config.get("learning_rate", 2e-4),
+                lr=float(train_config.get("learning_rate", 2e-4)),
                 betas=tuple(opt_config.get("betas", [0.9, 0.95])),
-                eps=opt_config.get("eps", 1e-8)
+                eps=float(opt_config.get("eps", 1e-8))
             )
             
     def _setup_scheduler(self):
