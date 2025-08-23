@@ -1,0 +1,137 @@
+# FineWeb-Edu FP8-Optimized Curriculum Learning Configuration
+# Training directly on high-quality educational content (score ≥3.5)
+# 4.1B tokens of curated educational material
+
+stage:
+  name: "fineweb_edu_foundation_fp8"
+  description: "FP8 curriculum on FineWeb-Edu: 64→2048 tokens"
+  
+data:
+  dataset_name: "Yxanul/fineweb-edu-highest-quality-2025"
+  dataset_split: "train"
+  streaming: false  # Download for faster access
+  
+  max_sequence_length: 2048
+  stride: 1024  # 50% overlap for better context
+  
+  tokenizer: "gpt2"
+  group_by_length: false
+  
+  # Specify text column explicitly
+  text_column: "text"
+  
+training:
+  # Duration - scale up since we have more data (4.1B tokens)
+  num_epochs: 1
+  max_steps: 150000  # More steps for larger dataset
+  
+  # Base configuration
+  per_device_train_batch_size: 32
+  gradient_accumulation_steps: 1
+  
+  # Learning rate (FP8 + high-quality data = higher LR)
+  learning_rate: 1e-3      # Higher for educational content
+  min_learning_rate: 1e-4
+  lr_scheduler_type: "cosine"
+  warmup_steps: 500
+  
+  # FP8-Optimized Curriculum for Educational Content
+  # Educational text benefits from longer initial sequences
+  use_curriculum: true
+  curriculum_stages:
+    # Phase 1: Word & phrase learning (faster with quality content)
+    - {step: 0,     seq_len: 128,  batch_size: 256, lr_scale: 12.0, warmup: 500, grad_clip: 5.0}  # 32,768 tokens
+    - {step: 3000,  seq_len: 256,  batch_size: 128, lr_scale: 8.0,  warmup: 300, grad_clip: 2.0}  # 32,768 tokens
+    
+    # Phase 2: Sentence & paragraph structure
+    - {step: 6000,  seq_len: 512,  batch_size: 64,  lr_scale: 4.0,  warmup: 200, grad_clip: 1.0}  # 32,768 tokens
+    - {step: 10000, seq_len: 768,  batch_size: 42,  lr_scale: 2.5,  warmup: 100, grad_clip: 0.5}  # 32,256 tokens
+    
+    # Phase 3: Document understanding
+    - {step: 15000, seq_len: 1024, batch_size: 32,  lr_scale: 1.5,  warmup: 100, grad_clip: 0.4}  # 32,768 tokens
+    - {step: 25000, seq_len: 1536, batch_size: 21,  lr_scale: 1.0,  warmup: 100, grad_clip: 0.3}  # 32,256 tokens
+    
+    # Phase 4: Full context mastery
+    - {step: 40000, seq_len: 2048, batch_size: 16,  lr_scale: 0.7,  warmup: 100, grad_clip: 0.3}  # 32,768 tokens
+    - {step: 60000, seq_len: 2048, batch_size: 18,  lr_scale: 0.5,  warmup: 50,  grad_clip: 0.3}  # 36,864 tokens
+    - {step: 100000, seq_len: 2048, batch_size: 20, lr_scale: 0.3,  warmup: 50,  grad_clip: 0.3}  # 40,960 tokens
+  
+  # Note: train_fp8.py adds +30% to these batch sizes automatically
+  # Effective: ~42-53k tokens per batch with FP8!
+  
+  # Optimizer
+  optimizer: "adamw"
+  adam_beta1: 0.9
+  adam_beta2: 0.95
+  adam_epsilon: 1e-8
+  weight_decay: 0.1
+  
+  # Gradient clipping
+  max_grad_norm: 1.0
+  
+  # FP8 settings
+  fp8_enabled: true
+  fp8_margin: 0
+  fp8_interval: 1
+  fp8_amax_history: 16
+  
+  # Checkpointing
+  save_strategy: "steps"
+  save_steps: 10000
+  save_total_limit: 5  # Keep more checkpoints for larger dataset
+  
+  # Evaluation
+  evaluation_strategy: "steps"
+  eval_steps: 2000
+  
+  # Logging
+  logging_steps: 100
+  logging_first_step: true
+  report_to: ["wandb"]
+  
+  # Seed
+  seed: 42
+  
+validation:
+  validation_split: 0.05  # ~200M tokens for validation
+  per_device_eval_batch_size: 32
+  
+dataset_advantages:
+  quality_metrics:
+    - "Educational score ≥3.5 (max ~5.3)"
+    - "Language score ≥0.95"
+    - "Minimum 1000 tokens per document"
+    - "4.1B total tokens"
+  
+  benefits_over_wikipedia:
+    - "More diverse educational content"
+    - "Higher quality threshold"
+    - "Naturally occurring educational language"
+    - "Better coverage of technical topics"
+    - "More recent content (2025 crawl)"
+  
+expected_results:
+  # With high-quality educational content + FP8
+  steps_to_perplexity_100: "~8,000"   # Faster due to quality
+  steps_to_perplexity_50: "~18,000"
+  steps_to_perplexity_30: "~30,000"
+  steps_to_perplexity_20: "~50,000"
+  
+  # Training efficiency
+  examples_seen_at_10k_steps: "5,000,000+"
+  wall_clock_speedup: "6-7x vs baseline"
+  quality_improvement: "Better downstream performance due to curated data"
+  
+  # Per stage metrics with FP8
+  stage_128_tokens_per_sec: "~35,000"
+  stage_256_tokens_per_sec: "~32,000"
+  stage_512_tokens_per_sec: "~28,000"
+  stage_1024_tokens_per_sec: "~24,000"
+  stage_2048_tokens_per_sec: "~20,000"
+  
+notes:
+  - "Starting with 128 tokens (not 64) since educational content is richer"
+  - "Higher base LR (1e-3) works well with quality data"
+  - "Longer training (150k steps) to fully utilize 4.1B tokens"
+  - "FP8 bonus allows ~50k tokens/batch in later stages"
+  - "No Wikipedia preprocessing needed - direct training!"
