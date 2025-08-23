@@ -1,39 +1,16 @@
-# Core dependencies
-torch>=2.1.0
-transformers>=4.36.0
+# Core dependencies for Yxanul training
+# Note: Use NVIDIA NGC container (nvcr.io/nvidia/pytorch:24.08-py3) for best results
+# That container includes PyTorch, CUDA, Transformer Engine, and Flash Attention
+
+# Essential packages
+transformers>=4.40.0
 datasets>=2.15.0
-tokenizers>=0.15.0
 accelerate>=0.25.0
+wandb
+pyyaml
+tqdm
 
-# Distributed training
-deepspeed>=0.12.0
-
-# Optimizations
-flash-attn>=2.4.0  # Flash Attention 3 when available
-apex  # For fused optimizers (optional but recommended)
-triton>=2.1.0  # For torch.compile optimizations
-bitsandbytes>=0.41.0  # For 8-bit optimizers
-
-# Monitoring and logging
-wandb>=0.16.0
-tensorboard>=2.15.0
-tqdm>=4.66.0
-
-# Data processing
-numpy>=1.24.0
-pandas>=2.1.0
-pyarrow>=14.0.0  # For dataset streaming
-huggingface-hub>=0.19.0
-
-# Configuration
-pyyaml>=6.0
-omegaconf>=2.3.0
-
-# Testing and validation
-pytest>=7.4.0
-black>=23.0.0
-isort>=5.12.0
-
-# Optional optimizations (install if available)
-# transformer-engine  # For FP8 training on H100
-# xformers>=0.0.22  # Alternative to flash-attn
+# Optional optimizations (included in NGC container)
+# transformer-engine  # For FP8 support
+# flash-attn         # For Flash Attention
+# apex               # For mixed precision
