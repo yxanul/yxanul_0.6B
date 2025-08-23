@@ -51,6 +51,7 @@ class StreamingDataset(IterableDataset):
         # Check for local preprocessed dataset first
         local_dataset_path = Path("./data/processed_dataset")
         local_raw_path = Path("./data/wikipedia")
+        local_cloned_path = Path("/workspace/fineweb-edu-highest-quality-2025")
         
         if local_dataset_path.exists():
             # Load preprocessed dataset from disk
@@ -101,13 +102,52 @@ class StreamingDataset(IterableDataset):
             
             self.dataset = Dataset.from_list(all_data)
             print(f"Dataset loaded from JSONL: {len(self.dataset)} examples")
+        elif local_cloned_path.exists() and "fineweb-edu" in self.dataset_name.lower():
+            # Load from cloned FineWeb-Edu repository
+            print(f"Loading FineWeb-Edu from cloned repository at {local_cloned_path}")
+            try:
+                # Load parquet files directly
+                parquet_files = list(local_cloned_path.glob("*.parquet"))
+                if parquet_files:
+                    from datasets import Dataset
+                    import pandas as pd
+                    
+                    # Load and concatenate parquet files
+                    dfs = []
+                    for pf in parquet_files[:10]:  # Limit for testing
+                        df = pd.read_parquet(pf)
+                        # Keep only text column
+                        if 'text' in df.columns:
+                            dfs.append(df[['text']])
+                    
+                    if dfs:
+                        combined_df = pd.concat(dfs, ignore_index=True)
+                        self.dataset = Dataset.from_pandas(combined_df)
+                        print(f"Loaded {len(self.dataset)} examples from cloned dataset")
+                    else:
+                        raise ValueError("No valid data found in parquet files")
+                else:
+                    # Try loading as a dataset
+                    self.dataset = load_dataset(
+                        str(local_cloned_path),
+                        split=self.split,
+                        streaming=False
+                    )
+            except Exception as e:
+                print(f"Error loading from cloned path: {e}")
+                print("Falling back to HuggingFace download...")
+                self.dataset = load_dataset(
+                    self.dataset_name,
+                    split=self.split,
+                    streaming=False
+                )
             
         else:
             # Fallback to HuggingFace (with rate limit handling)
             print("Local dataset not found. Attempting to download from HuggingFace...")
             print("This may fail due to rate limits. Consider running:")
-            print("  git clone https://huggingface.co/datasets/Yxanul/wikipedia-2k-high-quality ./data/wikipedia")
-            print("  python download_and_prepare_dataset.py")
+            print(f"  git clone https://huggingface.co/datasets/{self.dataset_name} /workspace/{self.dataset_name.split('/')[-1]}")
+            print("  Then restart training")
             
             try:
                 self.dataset = load_dataset(
