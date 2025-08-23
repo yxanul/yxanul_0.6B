@@ -156,13 +156,12 @@ class StreamingDataset(IterableDataset):
                     self.dataset = load_from_disk(self.dataset_name)
                     print(f"Loaded local dataset from {self.dataset_name}")
                 else:
-                    # Try to load with ignore_verifications to bypass schema issues
+                    # Load from HuggingFace
                     self.dataset = load_dataset(
                         self.dataset_name,
                         split=self.split,
                         streaming=False,
-                        num_proc=1,
-                        ignore_verifications=True
+                        num_proc=1
                     )
                 print(f"Dataset loaded: {len(self.dataset)} examples")
             except Exception as e:
