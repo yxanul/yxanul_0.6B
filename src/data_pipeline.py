@@ -6,7 +6,7 @@ Implements efficient streaming data loading from HuggingFace datasets.
 import torch
 from torch.utils.data import DataLoader, IterableDataset
 from datasets import load_dataset
-from transformers import GPT2Tokenizer
+from transformers import AutoTokenizer
 import numpy as np
 from typing import Dict, Optional, Iterator
 import random
@@ -290,9 +290,9 @@ def estimate_dataset_size(dataset_name: str, split: str = "train") -> int:
         return 100_000
 
 
-def create_tokenizer(model_name: str = "gpt2") -> GPT2Tokenizer:
+def create_tokenizer(model_name: str = "gpt2"):
     """Create and configure tokenizer."""
-    tokenizer = GPT2Tokenizer.from_pretrained(model_name)
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
     
     # Add padding token if not present
     if tokenizer.pad_token is None:
