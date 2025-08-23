@@ -150,12 +150,20 @@ class StreamingDataset(IterableDataset):
             print("  Then restart training")
             
             try:
-                self.dataset = load_dataset(
-                    self.dataset_name,
-                    split=self.split,
-                    streaming=False,
-                    num_proc=1
-                )
+                # Check if it's a local path
+                if self.dataset_name.startswith('/') or self.dataset_name.startswith('./'):
+                    from datasets import load_from_disk
+                    self.dataset = load_from_disk(self.dataset_name)
+                    print(f"Loaded local dataset from {self.dataset_name}")
+                else:
+                    # Try to load with ignore_verifications to bypass schema issues
+                    self.dataset = load_dataset(
+                        self.dataset_name,
+                        split=self.split,
+                        streaming=False,
+                        num_proc=1,
+                        ignore_verifications=True
+                    )
                 print(f"Dataset loaded: {len(self.dataset)} examples")
             except Exception as e:
                 print(f"\nError: {e}")
