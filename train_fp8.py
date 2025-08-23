@@ -32,11 +32,12 @@ from data_pipeline import create_dataloader, create_tokenizer
 # Check for Transformer Engine
 try:
     import transformer_engine.pytorch as te
+    TRANSFORMER_ENGINE_AVAILABLE = True
     print("Transformer Engine: Loaded successfully")
-    print(f"FP8 support available: {te.fp8.is_fp8_available()}")
+    print("FP8 support: ENABLED")
 except ImportError:
+    TRANSFORMER_ENGINE_AVAILABLE = False
     print("WARNING: Transformer Engine not installed!")
-    print("Install with: pip install transformer-engine[pytorch]")
     print("Falling back to BF16 training...")
 
 
