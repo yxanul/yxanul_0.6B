@@ -60,10 +60,10 @@ class FactorizedEmbedding(nn.Module):
     Instead of vocab_size × d_model parameters, uses:
     vocab_size × r + r × d_model parameters.
     
-    For r=128: 50257×128 + 128×768 = 6.5M vs 38.6M (83% reduction!)
+    For r=128: 200005×128 + 128×768 = 25.7M vs 153.6M (83% reduction!)
     """
     
-    def __init__(self, vocab_size: int = 50257, d_model: int = 768, r: int = 128):
+    def __init__(self, vocab_size: int = 200005, d_model: int = 768, r: int = 128):
         super().__init__()
         self.vocab_size = vocab_size
         self.d_model = d_model
@@ -73,8 +73,9 @@ class FactorizedEmbedding(nn.Module):
         self.embed = nn.Embedding(vocab_size, r)
         self.proj = nn.Linear(r, d_model, bias=False)
         
-        # Proper initialization to maintain variance
-        self.embed.weight.data.normal_(0, 1.0 / math.sqrt(r))
+        # Scaled initialization for SuperBPE's larger vocabulary
+        scale = math.log(max(2, vocab_size / 50257))  # Scale factor for larger vocab
+        self.embed.weight.data.normal_(0, 1.0 / math.sqrt(r * scale))
         self.proj.weight.data.normal_(0, math.sqrt(2.0 / r))
     
     def forward(self, input_ids: torch.Tensor) -> torch.Tensor:
@@ -91,7 +92,7 @@ class ModelConfig:
     num_attention_heads: int = 12
     num_kv_heads: int = 2  # For Grouped-Query Attention (GQA)
     intermediate_size: int = 2048  # Optimized for SwiGLU: 8/3 * hidden_size
-    vocab_size: int = 50257
+    vocab_size: int = 200005  # SuperBPE t=180k vocabulary
     max_position_embeddings: int = 4096
     
     # Advanced features

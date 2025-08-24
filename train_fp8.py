@@ -25,7 +25,7 @@ from dataclasses import fields
 sys.path.append('src')
 
 # Import FP8-optimized components
-from model_fp8 import create_fp8_model, ModelConfig
+from model_fp8_optimized import create_fp8_model, ModelConfig
 from trainer_fp8 import FP8Trainer
 from data_pipeline import create_dataloader, create_tokenizer
 
@@ -64,11 +64,15 @@ class CurriculumManager:
                 
         return self.current_stage
     
-    def should_update_dataloader(self, global_step, last_batch_size):
+    def should_update_dataloader(self, global_step, last_batch_size, last_seq_len=None):
         """Check if we need to recreate the dataloader."""
         stage = self.get_stage_for_step(global_step)
-        if stage and stage.get('batch_size') != last_batch_size:
-            return True, stage
+        if stage:
+            # Check if batch size OR sequence length changed
+            batch_changed = stage.get('batch_size') != last_batch_size
+            seq_changed = last_seq_len is not None and stage.get('seq_len') != last_seq_len
+            if batch_changed or seq_changed:
+                return True, stage
         return False, stage
     
     def get_lr_scale(self, global_step):
@@ -180,6 +184,19 @@ def main():
     model = create_fp8_model(filtered_model_config)
     model = model.to(device)
     
+    # Verify curriculum doesn't exceed model's positional embedding capacity
+    model_max_pos = filtered_model_config.get('max_position_embeddings', 4096)
+    if use_curriculum and curriculum_mgr.stages:
+        for i, stage in enumerate(curriculum_mgr.stages):
+            stage_seq_len = stage.get('seq_len', 0)
+            if stage_seq_len > model_max_pos:
+                print(f"WARNING: Curriculum stage {i+1} seq_len ({stage_seq_len}) exceeds model's max_position_embeddings ({model_max_pos})")
+                print(f"         Model has RoPE so it may extrapolate, but quality could degrade!")
+    
+    if max_seq_len > model_max_pos:
+        print(f"NOTICE: Maximum sequence length ({max_seq_len}) exceeds model's trained position limit ({model_max_pos})")
+        print(f"        RoPE can extrapolate but may have degraded performance beyond {model_max_pos} tokens")
+    
     # Print expected performance
     if rank == 0 and not args.disable_fp8:
         print("\nExpected FP8 Performance Improvements:")
@@ -189,8 +206,15 @@ def main():
         print("  - Automatic loss scaling")
         print("=" * 60)
     
-    # Create tokenizer
-    tokenizer = create_tokenizer("gpt2")
+    # Create tokenizer - Using SuperBPE for 31% token reduction!
+    # Get max sequence length from curriculum or config
+    max_seq_len = training_config.get('data', {}).get('max_sequence_length', 2048)
+    if use_curriculum and curriculum_mgr.stages:
+        # Find the maximum seq_len across all curriculum stages
+        max_seq_len = max(stage.get('seq_len', max_seq_len) for stage in curriculum_mgr.stages)
+    
+    tokenizer = create_tokenizer(max_length=max_seq_len)  # Defaults to SuperBPE t=80k
+    print(f"Tokenizer max_length set to: {max_seq_len}")
     
     # Get initial batch size (from config or first curriculum stage)
     if use_curriculum and curriculum_mgr.stages:
@@ -301,6 +325,11 @@ def main():
     
     global_step = start_step
     current_batch_size = initial_batch_size
+    current_seq_len = training_config.get('data', {}).get('max_sequence_length', 2048)
+    
+    # Override with first curriculum stage if available
+    if use_curriculum and curriculum_mgr.stages:
+        current_seq_len = curriculum_mgr.stages[0].get('seq_len', current_seq_len)
     
     # Main training loop
     for epoch in range(num_epochs):
@@ -319,7 +348,7 @@ def main():
             while True:
                 # Check if we need to update dataloader for curriculum
                 if use_curriculum:
-                    should_update, stage = curriculum_mgr.should_update_dataloader(global_step, current_batch_size)
+                    should_update, stage = curriculum_mgr.should_update_dataloader(global_step, current_batch_size, current_seq_len)
                     
                     if should_update:
                         new_batch_size = stage.get('batch_size', current_batch_size)
@@ -327,7 +356,7 @@ def main():
                         if not args.disable_fp8:
                             new_batch_size = int(new_batch_size * 1.3)
                         
-                        new_seq_len = stage.get('seq_len')
+                        new_seq_len = stage.get('seq_len', training_config.get('data', {}).get('max_sequence_length', 2048))
                         
                         if rank == 0:
                             print(f"\n[CURRICULUM UPDATE at step {global_step}]")
@@ -338,18 +367,19 @@ def main():
                             if not args.disable_fp8:
                                 print(f"  FP8 bonus: +30% batch size")
                         
-                        # Recreate dataloader with new batch size
+                        # Recreate dataloader with new batch size AND sequence length!
                         train_dataloader, train_dataset = create_dataloader(
                             dataset_name=training_config.get('data', {}).get('dataset_name'),
                             tokenizer=tokenizer,
                             batch_size=new_batch_size,
-                            max_length=training_config.get('data', {}).get('max_sequence_length', 2048),
+                            max_length=new_seq_len,  # CRITICAL: Apply the curriculum sequence length!
                             stage_config=training_config,
                             num_workers=2,
                             split='train'
                         )
                         trainer.train_dataloader = train_dataloader
                         current_batch_size = new_batch_size
+                        current_seq_len = new_seq_len
                         
                         # Update learning rate
                         lr_scale = stage.get('lr_scale', 1.0)

@@ -152,8 +152,8 @@ def main():
     model = create_model(filtered_model_config)
     model = model.to(device)
     
-    # Create tokenizer
-    tokenizer = create_tokenizer("gpt2")
+    # Create tokenizer - Using SuperBPE for 31% token reduction!
+    tokenizer = create_tokenizer()  # Defaults to SuperBPE t=180k
     
     # Get initial batch size (from config or first curriculum stage)
     if use_curriculum and curriculum_mgr.stages:

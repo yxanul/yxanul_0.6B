@@ -46,12 +46,12 @@ class EnhancedTrainer(OptimizedTrainer):
             return hook
         
         # Register hooks for important layers
-        if hasattr(self.model, 'model'):
+        # YxanulFP8Model exposes layers directly at self.model.layers
+        if hasattr(self.model, 'layers'):
             # Hook first and last transformer layers
-            if hasattr(self.model.model, 'layers'):
-                if len(self.model.model.layers) > 0:
-                    self.model.model.layers[0].register_forward_hook(hook_fn('layer_0'))
-                    self.model.model.layers[-1].register_forward_hook(hook_fn('layer_last'))
+            if len(self.model.layers) > 0:
+                self.model.layers[0].register_forward_hook(hook_fn('layer_0'))
+                self.model.layers[-1].register_forward_hook(hook_fn('layer_last'))
     
     def _init_wandb(self):
         """Enhanced WandB initialization with custom charts."""
@@ -363,12 +363,14 @@ class EnhancedTrainer(OptimizedTrainer):
             stats["weights/global_min"] = all_weights.min().item()
         
         # Per-layer statistics (sample important layers)
+        # YxanulFP8Model structure: embeddings, layers[0-27], final_norm, lm_head
         important_layers = [
-            "model.embed_tokens",
-            "model.layers.0",
-            "model.layers.13",  # Middle layer
-            "model.layers.27",  # Last layer
-            "model.ln_f",
+            "embeddings",
+            "layers.0",
+            "layers.13",  # Middle layer
+            "layers.27",  # Last layer (for 28-layer model)
+            "final_norm",
+            "lm_head",
         ]
         
         for layer_name in important_layers:
