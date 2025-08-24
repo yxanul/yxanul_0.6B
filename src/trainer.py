@@ -177,7 +177,11 @@ class OptimizedTrainer:
         
     def _apply_optimizations(self):
         """Apply all model optimizations."""
-        opt_config = self.config["optimization"]
+        # Handle missing optimization config
+        opt_config = self.config.get("optimization", {
+            "torch_compile": {"enabled": True, "mode": "default"},
+            "memory": {"gradient_checkpointing": {"enabled": True}}
+        })
         
         # Move model to device
         self.model = self.model.to(self.device)
@@ -230,8 +234,28 @@ class OptimizedTrainer:
             
     def _setup_optimizer(self):
         """Setup optimizer with all optimizations."""
-        opt_config = self.config["optimization"]["optimizer"]
-        train_config = self.config["training"]["training"]
+        # Handle both nested and flat config structures
+        if "optimization" in self.config:
+            opt_config = self.config.get("optimization", {}).get("optimizer", {})
+        else:
+            # Flat structure - use defaults
+            opt_config = {
+                "type": "adamw",
+                "lr": 1e-3,
+                "weight_decay": 0.1,
+                "betas": [0.9, 0.999],
+                "eps": 1e-8
+            }
+        
+        # Get training config
+        if "training" in self.config:
+            # Check if it's nested or flat
+            if isinstance(self.config["training"], dict) and "training" in self.config["training"]:
+                train_config = self.config["training"]["training"]
+            else:
+                train_config = self.config["training"]
+        else:
+            train_config = {}
         
         # Prepare parameters with weight decay
         no_decay = opt_config.get("no_decay_params", ["bias", "layer_norm", "layernorm"])
@@ -294,7 +318,18 @@ class OptimizedTrainer:
         
     def _setup_mixed_precision(self):
         """Setup mixed precision training."""
-        mp_config = self.config["optimization"]["mixed_precision"]
+        # Handle both nested and flat config structures
+        if "optimization" in self.config and "mixed_precision" in self.config.get("optimization", {}):
+            mp_config = self.config["optimization"]["mixed_precision"]
+        else:
+            # Use defaults for FP8/BF16
+            mp_config = {
+                "enabled": True,
+                "dtype": "bfloat16",
+                "fp8_config": {
+                    "enabled": False
+                }
+            }
         
         if mp_config.get("enabled", False):
             dtype = mp_config.get("dtype", "bfloat16")
