@@ -11,6 +11,7 @@ import numpy as np
 from typing import Dict, Optional, Iterator
 import random
 from pathlib import Path
+import os  # Required for environment variables
 
 # Maximum buffer size to prevent memory leaks
 MAX_BUFFER_SIZE = 100000  # Prevent OOM with very long documents
