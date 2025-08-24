@@ -392,6 +392,18 @@ class YxanulFP8Model(nn.Module):
         self.final_norm = nn.RMSNorm(config.hidden_size, eps=1e-6)
         self.final_norm = self.final_norm.to(torch.bfloat16)
         
+        # Gradient checkpointing support
+        self.gradient_checkpointing = False
+    
+    def gradient_checkpointing_enable(self):
+        """Enable gradient checkpointing for memory efficiency."""
+        self.gradient_checkpointing = True
+        print("Gradient checkpointing enabled for YxanulFP8Model")
+    
+    def gradient_checkpointing_disable(self):
+        """Disable gradient checkpointing."""
+        self.gradient_checkpointing = False
+        
     def forward(
         self,
         input_ids: torch.Tensor,

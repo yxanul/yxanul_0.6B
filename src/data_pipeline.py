@@ -462,18 +462,35 @@ def create_tokenizer(model_name: str = "UW/OLMo2-8B-SuperBPE-t80k", use_superbpe
         # Use SuperBPE-t80k tokenizer for 37.5% token reduction (maximum efficiency)
         print("Loading SuperBPE t=80k tokenizer (37.5% fewer tokens than GPT-2!)...")
         print("Research mode: Maximum compression for faster experimentation")
-        try:
-            tokenizer = AutoTokenizer.from_pretrained(
-                "UW/OLMo2-8B-SuperBPE-t80k",  # t=80k for maximum compression
-                token=os.environ.get("HF_TOKEN"),  # Use environment variable for security
-                trust_remote_code=True
-            )
-            print(f"SuperBPE-t80k tokenizer loaded successfully! Vocabulary size: {len(tokenizer)}")
-            print(f"Efficiency: 7.184 chars/token (vs 4.488 for GPT-2)")
-        except Exception as e:
-            print(f"Warning: Could not load SuperBPE-t80k tokenizer: {e}")
-            print("Trying SuperBPE-t180k as fallback...")
+        
+        # Try loading from local cache first
+        cache_paths = ["./tokenizer_cache/superbpe-t80k", "./tokenizer_cache/superbpe-t180k"]
+        tokenizer = None
+        
+        for cache_path in cache_paths:
+            if os.path.exists(cache_path):
+                try:
+                    print(f"Loading tokenizer from cache: {cache_path}")
+                    tokenizer = AutoTokenizer.from_pretrained(cache_path)
+                    print(f"✓ Loaded from cache successfully!")
+                    break
+                except:
+                    pass
+        
+        if tokenizer is None:
             try:
+                tokenizer = AutoTokenizer.from_pretrained(
+                    "UW/OLMo2-8B-SuperBPE-t80k",  # t=80k for maximum compression
+                    token=os.environ.get("HF_TOKEN"),  # Use environment variable for security
+                    trust_remote_code=True,
+                    use_fast=False  # Use slow tokenizer for better compatibility
+                )
+                print(f"SuperBPE-t80k tokenizer loaded successfully! Vocabulary size: {len(tokenizer)}")
+                print(f"Efficiency: 7.184 chars/token (vs 4.488 for GPT-2)")
+            except Exception as e:
+                print(f"Warning: Could not load SuperBPE-t80k tokenizer: {e}")
+                print("Trying SuperBPE-t180k as fallback...")
+                try:
                 tokenizer = AutoTokenizer.from_pretrained(
                     "UW/OLMo2-8B-SuperBPE-t180k",  # Fallback to t=180k
                     token=os.environ.get("HF_TOKEN"),  # Use environment variable for security
