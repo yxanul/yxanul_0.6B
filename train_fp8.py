@@ -286,16 +286,19 @@ def main():
         if rank == 0:
             print(f"Resumed from step {start_step}")
     
-    # Training parameters
-    num_epochs = training_config.get('training', {}).get('num_epochs', 1)
-    max_steps = training_config.get('training', {}).get('max_steps', -1)
-    checkpoint_steps = training_config.get('training', {}).get('save_steps', 10000)
-    eval_steps = training_config.get('training', {}).get('eval_steps', 2000)
-    logging_steps = training_config.get('training', {}).get('logging_steps', 100)
-    save_total_limit = training_config.get('training', {}).get('save_total_limit', 3)
+    # Training parameters (handle flat structure and ensure correct types)
+    num_epochs = int(training_config.get('num_epochs', training_config.get('training', {}).get('num_epochs', 1)))
+    max_steps = int(training_config.get('max_steps', training_config.get('training', {}).get('max_steps', -1)))
+    checkpoint_steps = int(training_config.get('save_steps', training_config.get('training', {}).get('save_steps', 10000)))
+    eval_steps = int(training_config.get('eval_steps', training_config.get('training', {}).get('eval_steps', 2000)))
+    logging_steps = int(training_config.get('logging_steps', training_config.get('training', {}).get('logging_steps', 100)))
+    save_total_limit = int(training_config.get('save_total_limit', training_config.get('training', {}).get('save_total_limit', 3)))
     
-    # Get base learning rate
-    base_lr = training_config.get('training', {}).get('learning_rate', 6e-4)
+    # Get base learning rate (handle both nested and flat structure, ensure float)
+    if 'learning_rate' in training_config:
+        base_lr = float(training_config.get('learning_rate', 6e-4))
+    else:
+        base_lr = float(training_config.get('training', {}).get('learning_rate', 6e-4))
     
     # Initialize WandB
     if rank == 0:
@@ -382,7 +385,7 @@ def main():
                         current_seq_len = new_seq_len
                         
                         # Update learning rate
-                        lr_scale = stage.get('lr_scale', 1.0)
+                        lr_scale = float(stage.get('lr_scale', 1.0))
                         new_lr = base_lr * lr_scale
                         for param_group in trainer.optimizer.param_groups:
                             param_group['lr'] = new_lr
