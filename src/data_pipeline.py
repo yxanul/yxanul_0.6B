@@ -491,15 +491,16 @@ def create_tokenizer(model_name: str = "UW/OLMo2-8B-SuperBPE-t80k", use_superbpe
                 print(f"Warning: Could not load SuperBPE-t80k tokenizer: {e}")
                 print("Trying SuperBPE-t180k as fallback...")
                 try:
-                tokenizer = AutoTokenizer.from_pretrained(
-                    "UW/OLMo2-8B-SuperBPE-t180k",  # Fallback to t=180k
-                    token=os.environ.get("HF_TOKEN"),  # Use environment variable for security
-                    trust_remote_code=True
-                )
-                print(f"SuperBPE-t180k loaded as fallback (31% reduction)")
-            except:
-                print("Falling back to GPT-2 tokenizer...")
-                tokenizer = AutoTokenizer.from_pretrained("gpt2")
+                    tokenizer = AutoTokenizer.from_pretrained(
+                        "UW/OLMo2-8B-SuperBPE-t180k",  # Fallback to t=180k
+                        token=os.environ.get("HF_TOKEN"),  # Use environment variable for security
+                        trust_remote_code=True,
+                        use_fast=False
+                    )
+                    print(f"SuperBPE-t180k loaded as fallback (31% reduction)")
+                except:
+                    print("Falling back to GPT-2 tokenizer...")
+                    tokenizer = AutoTokenizer.from_pretrained("gpt2")
     else:
         # Use specified tokenizer (e.g., GPT-2 for compatibility)
         tokenizer = AutoTokenizer.from_pretrained(model_name)
