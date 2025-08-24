@@ -30,7 +30,7 @@ class StreamingDataset(IterableDataset):
         dataset_name: str,
         tokenizer,
         max_length: int = 2048,
-        stride: int = 1024,
+        stride: int = None,  # Will be computed based on current sequence length
         stage_config: Dict = None,
         split: str = "train",
         add_eos_between_docs: bool = True
@@ -38,7 +38,6 @@ class StreamingDataset(IterableDataset):
         self.dataset_name = dataset_name
         self.tokenizer = tokenizer
         self.max_length = max_length
-        self.stride = stride
         self.stage_config = stage_config if stage_config is not None else {}
         self.split = split
         self.add_eos_between_docs = add_eos_between_docs  # Add EOS tokens at document boundaries
@@ -52,6 +51,18 @@ class StreamingDataset(IterableDataset):
             self.current_seq_length = max_length
         self.target_seq_length = max_length
         self.curriculum_stages = training_config.get("curriculum_stages", [])
+        
+        # Compute stride based on current sequence length (50% overlap for efficiency)
+        # For very short sequences, use full sequence as stride (no overlap)
+        if stride is None:
+            if self.current_seq_length <= 64:
+                self.stride = self.current_seq_length  # No overlap for very short sequences
+            else:
+                self.stride = max(1, int(self.current_seq_length * 0.5))  # 50% overlap
+        else:
+            self.stride = stride
+        
+        print(f"Dataset initialized with seq_len={self.current_seq_length}, stride={self.stride}")
         
         # Load the dataset - try local first, then HuggingFace
         print(f"Loading dataset: {self.dataset_name} (split: {self.split})")
@@ -262,7 +273,9 @@ class StreamingDataset(IterableDataset):
                         # Create chunks when buffer is large enough
                         while len(buffer) >= self.current_seq_length:
                             chunk = buffer[:self.current_seq_length]
-                            buffer = buffer[self.stride:]  # Sliding window
+                            # Use proper stride based on current sequence length
+                            actual_stride = min(self.stride, self.current_seq_length)
+                            buffer = buffer[actual_stride:]  # Sliding window
                             
                             # Create input and labels
                             input_ids = torch.tensor(chunk[:-1], dtype=torch.long)
@@ -334,7 +347,9 @@ class StreamingDataset(IterableDataset):
                 # Create chunks when buffer is large enough
                 while len(buffer) >= self.current_seq_length:
                     chunk = buffer[:self.current_seq_length]
-                    buffer = buffer[self.stride:]  # Sliding window with stride
+                    # Use proper stride based on current sequence length
+                    actual_stride = min(self.stride, self.current_seq_length)
+                    buffer = buffer[actual_stride:]  # Sliding window with stride
                     
                     # Create input and labels
                     input_ids = torch.tensor(chunk[:-1], dtype=torch.long)
@@ -362,11 +377,21 @@ class StreamingDataset(IterableDataset):
         """Update sequence length for curriculum learning."""
         if self.curriculum_stages:
             # Find the appropriate stage based on current step
+            old_seq_length = self.current_seq_length
             for stage in self.curriculum_stages:
                 if step >= stage.get("step", 0):
                     self.current_seq_length = stage["seq_len"]
                 else:
                     break
+            
+            # Update stride when sequence length changes
+            if old_seq_length != self.current_seq_length:
+                if self.current_seq_length <= 64:
+                    self.stride = self.current_seq_length  # No overlap for very short sequences
+                else:
+                    self.stride = max(1, int(self.current_seq_length * 0.5))  # 50% overlap
+                print(f"Updated seq_len={self.current_seq_length}, stride={self.stride} at step {step}")
+            
             return self.current_seq_length
         return self.max_length
 
@@ -391,6 +416,34 @@ class DataCollator:
         return batch
 
 
+def fp8_collate_fn(batch):
+    """Custom collate function that ensures FP8 dimension requirements.
+    FP8 needs batch dimension divisible by 8 and hidden dim divisible by 16.
+    """
+    # Stack the batch normally
+    input_ids = torch.stack([item['input_ids'] for item in batch])
+    labels = torch.stack([item['labels'] for item in batch])
+    attention_mask = torch.stack([item['attention_mask'] for item in batch])
+    
+    # Ensure batch dimension is divisible by 8 for FP8
+    batch_size = input_ids.size(0)
+    if batch_size % 8 != 0:
+        pad_size = 8 - (batch_size % 8)
+        # Pad with dummy samples (will be masked out by attention mask)
+        pad_input = torch.zeros(pad_size, input_ids.size(1), dtype=input_ids.dtype)
+        pad_labels = torch.full((pad_size, labels.size(1)), -100, dtype=labels.dtype)
+        pad_mask = torch.zeros(pad_size, attention_mask.size(1), dtype=attention_mask.dtype)
+        
+        input_ids = torch.cat([input_ids, pad_input], dim=0)
+        labels = torch.cat([labels, pad_labels], dim=0)
+        attention_mask = torch.cat([attention_mask, pad_mask], dim=0)
+    
+    return {
+        'input_ids': input_ids,
+        'labels': labels,
+        'attention_mask': attention_mask
+    }
+
 def create_dataloader(
     dataset_name: str,
     tokenizer,
@@ -403,22 +456,31 @@ def create_dataloader(
 ) -> DataLoader:
     """Create a DataLoader for streaming dataset."""
     
+    # Don't pass stride - let StreamingDataset compute it based on sequence length
     dataset = StreamingDataset(
         dataset_name=dataset_name,
         tokenizer=tokenizer,
         max_length=max_length,
-        stride=int(max_length * 0.5),  # 50% overlap
+        stride=None,  # Will be computed based on current sequence length
         stage_config=stage_config,
         split=split,
         add_eos_between_docs=add_eos_between_docs
     )
     
-    collator = DataCollator(pad_token_id=tokenizer.pad_token_id)
+    # Use FP8 collate function for proper dimension padding
+    # FP8 requires batch dimension divisible by 8
+    use_fp8_collate = os.environ.get("USE_FP8", "true").lower() == "true"
+    
+    if use_fp8_collate:
+        collate_fn = fp8_collate_fn
+    else:
+        collator = DataCollator(pad_token_id=tokenizer.pad_token_id)
+        collate_fn = collator
     
     dataloader = DataLoader(
         dataset,
         batch_size=batch_size,
-        collate_fn=collator,
+        collate_fn=collate_fn,
         num_workers=num_workers,
         pin_memory=True,
         prefetch_factor=2 if num_workers > 0 else None
