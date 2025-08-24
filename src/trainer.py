@@ -300,7 +300,15 @@ class OptimizedTrainer:
             
     def _setup_scheduler(self):
         """Setup learning rate scheduler."""
-        train_config = self.config["training"]["training"]
+        # Handle both nested and flat config structures
+        if "training" in self.config:
+            # Check if it's nested or flat
+            if isinstance(self.config["training"], dict) and "training" in self.config["training"]:
+                train_config = self.config["training"]["training"]
+            else:
+                train_config = self.config["training"]
+        else:
+            train_config = {}
         
         # Calculate total steps based on actual dataset
         if self.total_steps == 0:
@@ -432,7 +440,10 @@ class OptimizedTrainer:
             loss.backward()
         
         # Gradient clipping
-        grad_config = self.config["optimization"]["gradients"]
+        grad_config = self.config.get("optimization", {}).get("gradients", {
+            "clip_type": "norm",
+            "clip_value": 1.0
+        })
         if grad_config.get("clip_type") == "norm":
             if self.scaler is not None:
                 self.scaler.unscale_(self.optimizer)
@@ -524,13 +535,13 @@ class OptimizedTrainer:
     
     def setup_data_pipeline(self, num_epochs: int):
         """Setup data loading pipeline."""
-        train_config = self.config["training"]
-        data_config = train_config.get("data", {})
+        train_config = self.config.get("training", {})
+        data_config = self.config.get("data", train_config.get("data", {}))
         
         # Get dataset info
         dataset_name = data_config.get("dataset_name", "Yxanul/wikipedia-2k-high-quality")
-        batch_size = int(train_config["training"].get("batch_size", 8))
-        max_length = int(train_config["training"].get("max_sequence_length", 2048))
+        batch_size = int(train_config.get("batch_size", 8))
+        max_length = int(data_config.get("max_sequence_length", 2048))
         
         # Estimate dataset size
         self.dataset_size = estimate_dataset_size(dataset_name)
