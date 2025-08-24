@@ -187,7 +187,10 @@ class OptimizedTrainer:
         self.model = self.model.to(self.device)
         
         # Torch compile (PyTorch 2.0+)
-        if opt_config.get("torch_compile", {}).get("enabled", False):
+        # Note: Disable torch.compile if using Transformer Engine FP8 layers (incompatible)
+        has_te_layers = any("transformer_engine" in str(type(m)) for m in self.model.modules())
+        
+        if opt_config.get("torch_compile", {}).get("enabled", False) and not has_te_layers:
             print("Applying torch.compile optimization...")
             self.model = torch.compile(
                 self.model,
@@ -195,6 +198,8 @@ class OptimizedTrainer:
                 fullgraph=opt_config["torch_compile"].get("fullgraph", False),
                 backend=opt_config["torch_compile"].get("backend", "inductor")
             )
+        elif has_te_layers and opt_config.get("torch_compile", {}).get("enabled", False):
+            print("Skipping torch.compile (incompatible with Transformer Engine FP8 layers)")
         
         # Setup distributed model
         if self.world_size > 1:
