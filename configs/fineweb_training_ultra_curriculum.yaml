@@ -26,11 +26,11 @@ training:
     # "The quick brown fox jumps" level
     - step: 0
       seq_len: 8
-      batch_size: 512  # Conservative for RTX 4090 24GB
+      batch_size: 256  # Very conservative for RTX 4090 24GB
       lr_scale: 0.3      # Very gentle start
       grad_clip: 0.5     # Heavy clipping for stability
       warmup_steps: 1000
-      gradient_accumulation_steps: 8  # Effective batch = 4096
+      gradient_accumulation_steps: 16  # Effective batch = 4096
       description: "Learning basic phrases and word patterns"
       # 4,096 tokens per batch effective
     
@@ -38,12 +38,12 @@ training:
     # "The quick brown fox jumps over the lazy dog" level
     - step: 2000
       seq_len: 16
-      batch_size: 512  # Conservative
+      batch_size: 256  # Conservative
       lr_scale: 0.4
       grad_clip: 0.5
-      gradient_accumulation_steps: 4  # Effective batch = 2048
+      gradient_accumulation_steps: 8  # Effective batch = 2048
       description: "Learning complete sentences and basic grammar"
-      # 8,192 tokens per batch effective
+      # 4,096 tokens per batch effective
     
     # Stage 3: Compound sentences (32 tokens = ~230 chars)
     # Full paragraph with 2-3 sentences

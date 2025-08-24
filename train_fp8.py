@@ -219,19 +219,19 @@ def main():
     # Get initial batch size (from config or first curriculum stage)
     if use_curriculum and curriculum_mgr.stages:
         initial_batch_size = curriculum_mgr.stages[0].get('batch_size', 32)
-        # For FP8, we can use even larger batches
-        if not args.disable_fp8:
-            initial_batch_size = int(initial_batch_size * 1.3)  # 30% larger with FP8
-            print(f"FP8 bonus: Increased batch size to {initial_batch_size}")
+        initial_seq_len = curriculum_mgr.stages[0].get('seq_len', 2048)
+        # No FP8 bonus - we've already set conservative sizes
+        print(f"Initial batch size: {initial_batch_size}, seq_len: {initial_seq_len}")
     else:
         initial_batch_size = training_config.get('training', {}).get('per_device_train_batch_size', 32)
+        initial_seq_len = training_config.get('data', {}).get('max_sequence_length', 2048)
     
-    # Create initial dataloaders
+    # Create initial dataloaders with curriculum seq_len if applicable
     train_dataloader, train_dataset = create_dataloader(
         dataset_name=training_config.get('data', {}).get('dataset_name', 'Yxanul/wikipedia-2k-high-quality'),
         tokenizer=tokenizer,
         batch_size=initial_batch_size,
-        max_length=training_config.get('data', {}).get('max_sequence_length', 2048),
+        max_length=initial_seq_len,  # Use curriculum seq_len from stage 1
         stage_config=training_config,
         num_workers=2,
         split='train'
@@ -355,20 +355,16 @@ def main():
                     
                     if should_update:
                         new_batch_size = stage.get('batch_size', current_batch_size)
-                        # Apply FP8 batch size bonus
-                        if not args.disable_fp8:
-                            new_batch_size = int(new_batch_size * 1.3)
-                        
+                        # No FP8 bonus - using conservative sizes
                         new_seq_len = stage.get('seq_len', training_config.get('data', {}).get('max_sequence_length', 2048))
                         
                         if rank == 0:
                             print(f"\n[CURRICULUM UPDATE at step {global_step}]")
                             print(f"  Batch size: {current_batch_size} → {new_batch_size}")
-                            print(f"  Sequence length: → {new_seq_len}")
+                            print(f"  Sequence length: {current_seq_len} → {new_seq_len}")
                             print(f"  LR scale: {stage.get('lr_scale', 1.0)}x")
                             print(f"  Gradient clip: {stage.get('grad_clip', 1.0)}")
-                            if not args.disable_fp8:
-                                print(f"  FP8 bonus: +30% batch size")
+                            print(f"  Gradient accumulation: {stage.get('gradient_accumulation_steps', 1)} steps")
                         
                         # Recreate dataloader with new batch size AND sequence length!
                         train_dataloader, train_dataset = create_dataloader(
