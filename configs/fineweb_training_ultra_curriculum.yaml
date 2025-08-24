@@ -26,105 +26,105 @@ training:
     # "The quick brown fox jumps" level
     - step: 0
       seq_len: 8
-      batch_size: 4096  # FP8: Can do 8192! BF16: 4096
+      batch_size: 512  # Conservative for RTX 4090 24GB
       lr_scale: 0.3      # Very gentle start
       grad_clip: 0.5     # Heavy clipping for stability
       warmup_steps: 1000
-      gradient_accumulation_steps: 1  # No accumulation needed!
+      gradient_accumulation_steps: 8  # Effective batch = 4096
       description: "Learning basic phrases and word patterns"
-      # 32,768 tokens per batch - incredible throughput!
+      # 4,096 tokens per batch effective
     
     # Stage 2: Complete sentences (16 tokens = ~115 chars)
     # "The quick brown fox jumps over the lazy dog" level
     - step: 2000
       seq_len: 16
-      batch_size: 4096  # FP8: Can do 8192!
+      batch_size: 512  # Conservative
       lr_scale: 0.4
       grad_clip: 0.5
-      gradient_accumulation_steps: 1
+      gradient_accumulation_steps: 4  # Effective batch = 2048
       description: "Learning complete sentences and basic grammar"
-      # 65,536 tokens per batch!
+      # 8,192 tokens per batch effective
     
     # Stage 3: Compound sentences (32 tokens = ~230 chars)
     # Full paragraph with 2-3 sentences
     - step: 5000
       seq_len: 32
-      batch_size: 2048  # FP8: Can do 4096!
+      batch_size: 256  # Reduced for longer sequences
       lr_scale: 0.5
       grad_clip: 0.7
-      gradient_accumulation_steps: 1
+      gradient_accumulation_steps: 4  # Effective batch = 1024
       description: "Learning paragraph structure and flow"
-      # 65,536 tokens per batch!
+      # 8,192 tokens per batch effective
     
     # Stage 4: Short paragraphs (64 tokens = ~460 chars)
     - step: 10000
       seq_len: 64
-      batch_size: 1024  # FP8: 2048, BF16: 1024
+      batch_size: 128  # Further reduced
       lr_scale: 0.6
       grad_clip: 0.8
-      gradient_accumulation_steps: 1
+      gradient_accumulation_steps: 4  # Effective batch = 512
       description: "Learning multi-sentence coherence"
-      # 65,536 tokens per batch!
+      # 8,192 tokens per batch effective
     
     # Stage 5: Full paragraphs (128 tokens = ~920 chars)
     - step: 20000
       seq_len: 128
-      batch_size: 512  # FP8: 1024, BF16: 512
+      batch_size: 64  # Conservative for longer sequences
       lr_scale: 0.75
       grad_clip: 0.9
-      gradient_accumulation_steps: 1
+      gradient_accumulation_steps: 4  # Effective batch = 256
       description: "Learning extended context and topic development"
       # 65,536 tokens per batch!
     
     # Stage 6: Multiple paragraphs (256 tokens = ~1,840 chars)
     - step: 35000
       seq_len: 256
-      batch_size: 256  # FP8: 512, BF16: 256
+      batch_size: 32  # Reduced for RTX 4090
       lr_scale: 0.85
       grad_clip: 1.0
-      gradient_accumulation_steps: 1
+      gradient_accumulation_steps: 4  # Effective batch = 128
       description: "Learning section-level coherence"
-      # 65,536 tokens per batch!
+      # 8,192 tokens per batch effective
     
     # Stage 7: Article sections (512 tokens = ~3,680 chars)
     - step: 55000
       seq_len: 512
-      batch_size: 128  # FP8: 256, BF16: 128
+      batch_size: 16  # Conservative
       lr_scale: 0.95
       grad_clip: 1.0
-      gradient_accumulation_steps: 1
+      gradient_accumulation_steps: 4  # Effective batch = 64
       description: "Learning document structure"
-      # 65,536 tokens per batch!
+      # 8,192 tokens per batch effective
     
     # Stage 8: Half articles (768 tokens = ~5,520 chars)
     - step: 80000
       seq_len: 768
-      batch_size: 128  # FP8: 256, BF16: 128
+      batch_size: 12  # Very conservative
       lr_scale: 1.0
       grad_clip: 1.0
-      gradient_accumulation_steps: 1
+      gradient_accumulation_steps: 4  # Effective batch = 48
       description: "Learning extended reasoning"
-      # 98,304 tokens per batch!
+      # 9,216 tokens per batch effective
     
     # Stage 9: Near-full articles (1536 tokens = ~11,040 chars)
     - step: 110000
       seq_len: 1536
-      batch_size: 64  # FP8: 128, BF16: 64
+      batch_size: 6  # Minimal for long sequences
       lr_scale: 1.0
       grad_clip: 1.0
-      gradient_accumulation_steps: 1
+      gradient_accumulation_steps: 8  # Effective batch = 48
       description: "Learning complete document understanding"
-      # 98,304 tokens per batch!
+      # 9,216 tokens per batch effective
     
     # Stage 10: Full articles (2048 tokens = ~14,720 chars)
     - step: 140000
       seq_len: 2048
-      batch_size: 32  # FP8: 64, BF16: 32
+      batch_size: 4  # Minimum viable batch for RTX 4090
       lr_scale: 1.0
       grad_clip: 1.0
-      gradient_accumulation_steps: 2  # Reach 131k tokens
+      gradient_accumulation_steps: 8  # Effective batch = 32
       description: "Maximum context window training"
-      # 131,072 tokens per optimizer step!
+      # 8,192 tokens per batch effective
 
   # Learning rate schedule
   learning_rate: 6e-4  # Higher for smaller sequences
