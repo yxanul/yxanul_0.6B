@@ -38,63 +38,63 @@ training:
     # "The quick brown fox jumps over the lazy dog" level
     - step: 2000
       seq_len: 16
-      batch_size: 512  # Increased
+      batch_size: 256  # Reduced to prevent OOM (2x seq_len = ~2x memory)
       lr_scale: 0.4
       grad_clip: 0.5
-      gradient_accumulation_steps: 4  # Effective batch = 2048
+      gradient_accumulation_steps: 4  # Effective batch = 1024
       description: "Learning complete sentences and basic grammar"
-      # 8,192 tokens per batch effective
+      # 4,096 tokens per batch effective
     
     # Stage 3: Compound sentences (32 tokens = ~230 chars)
     # Full paragraph with 2-3 sentences
     - step: 5000
       seq_len: 32
-      batch_size: 384  # Increased, divisible by 8
+      batch_size: 128  # Reduced to prevent OOM (4x seq_len from stage 1)
       lr_scale: 0.5
       grad_clip: 0.7
-      gradient_accumulation_steps: 3  # Effective batch = 1152
+      gradient_accumulation_steps: 4  # Effective batch = 512
       description: "Learning paragraph structure and flow"
-      # 12,288 tokens per batch effective
+      # 4,096 tokens per batch effective
     
     # Stage 4: Short paragraphs (64 tokens = ~460 chars)
     - step: 10000
       seq_len: 64
-      batch_size: 192  # Increased, divisible by 8
+      batch_size: 64  # Reduced to prevent OOM
       lr_scale: 0.6
       grad_clip: 0.8
-      gradient_accumulation_steps: 3  # Effective batch = 576
+      gradient_accumulation_steps: 4  # Effective batch = 256
       description: "Learning multi-sentence coherence"
-      # 12,288 tokens per batch effective
+      # 4,096 tokens per batch effective
     
     # Stage 5: Full paragraphs (128 tokens = ~920 chars)
     - step: 20000
       seq_len: 128
-      batch_size: 96  # Increased, divisible by 8
+      batch_size: 32  # Reduced to prevent OOM
       lr_scale: 0.75
       grad_clip: 0.9
-      gradient_accumulation_steps: 3  # Effective batch = 288
+      gradient_accumulation_steps: 4  # Effective batch = 128
       description: "Learning extended context and topic development"
-      # 65,536 tokens per batch!
+      # 4,096 tokens per batch effective
     
     # Stage 6: Multiple paragraphs (256 tokens = ~1,840 chars)
     - step: 35000
       seq_len: 256
-      batch_size: 48  # Increased, divisible by 8
+      batch_size: 16  # Reduced to prevent OOM
       lr_scale: 0.85
       grad_clip: 1.0
-      gradient_accumulation_steps: 3  # Effective batch = 144
+      gradient_accumulation_steps: 4  # Effective batch = 64
       description: "Learning section-level coherence"
-      # 12,288 tokens per batch effective
+      # 4,096 tokens per batch effective
     
     # Stage 7: Article sections (512 tokens = ~3,680 chars)
     - step: 55000
       seq_len: 512
-      batch_size: 24  # Increased, divisible by 8
+      batch_size: 8  # Conservative for longer sequences
       lr_scale: 0.95
       grad_clip: 1.0
-      gradient_accumulation_steps: 3  # Effective batch = 72
+      gradient_accumulation_steps: 4  # Effective batch = 32
       description: "Learning document structure"
-      # 12,288 tokens per batch effective
+      # 4,096 tokens per batch effective
     
     # Stage 8: Half articles (768 tokens = ~5,520 chars)
     - step: 80000
