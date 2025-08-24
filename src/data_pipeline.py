@@ -44,13 +44,18 @@ class StreamingDataset(IterableDataset):
         
         # For sequence length curriculum - use training config
         training_config = self.stage_config.get("training", {})
-        if training_config.get("use_curriculum", False) and training_config.get("curriculum_stages"):
-            # Get the first stage's sequence length
-            self.current_seq_length = training_config["curriculum_stages"][0]["seq_len"]
-        else:
-            self.current_seq_length = max_length
-        self.target_seq_length = max_length
         self.curriculum_stages = training_config.get("curriculum_stages", [])
+        
+        # Use the provided max_length as current sequence length
+        # This ensures when dataloader is recreated with new max_length, it uses that value
+        self.current_seq_length = max_length
+        self.target_seq_length = max_length
+        
+        # Only use first stage seq_len if max_length wasn't explicitly set to something else
+        if training_config.get("use_curriculum", False) and self.curriculum_stages:
+            # If max_length is still the default (2048), use first stage
+            if max_length == 2048 and self.curriculum_stages:
+                self.current_seq_length = self.curriculum_stages[0]["seq_len"]
         
         # Compute stride based on current sequence length (50% overlap for efficiency)
         # For very short sequences, use full sequence as stride (no overlap)
