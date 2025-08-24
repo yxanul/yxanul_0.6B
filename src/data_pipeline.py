@@ -464,7 +464,7 @@ def create_tokenizer(model_name: str = "UW/OLMo2-8B-SuperBPE-t80k", use_superbpe
         try:
             tokenizer = AutoTokenizer.from_pretrained(
                 "UW/OLMo2-8B-SuperBPE-t80k",  # t=80k for maximum compression
-                token="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",  # HF token if needed
+                token=os.environ.get("HF_TOKEN"),  # Use environment variable for security
                 trust_remote_code=True
             )
             print(f"SuperBPE-t80k tokenizer loaded successfully! Vocabulary size: {len(tokenizer)}")
@@ -475,7 +475,7 @@ def create_tokenizer(model_name: str = "UW/OLMo2-8B-SuperBPE-t80k", use_superbpe
             try:
                 tokenizer = AutoTokenizer.from_pretrained(
                     "UW/OLMo2-8B-SuperBPE-t180k",  # Fallback to t=180k
-                    token="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",
+                    token=os.environ.get("HF_TOKEN"),  # Use environment variable for security
                     trust_remote_code=True
                 )
                 print(f"SuperBPE-t180k loaded as fallback (31% reduction)")

@@ -60,12 +60,22 @@ Precision Strategy (DeepSeek-style):
 
 ## 🔥 Quick Start
 
+### Prerequisites
+
+```bash
+# 1. Set up environment variables (required for SuperBPE tokenizer)
+cp .env.example .env
+# Edit .env and add your Hugging Face token from https://huggingface.co/settings/tokens
+export $(cat .env | xargs)
+```
+
 ### Using NVIDIA NGC Container (Recommended)
 
 ```bash
-# 1. Launch NVIDIA container with all dependencies
+# 2. Launch NVIDIA container with all dependencies
 docker run --gpus all -it --rm \
   -v $(pwd):/workspace \
+  -e HF_TOKEN=$HF_TOKEN \
   nvcr.io/nvidia/pytorch:24.10-py3
 
 # 2. Clone repository

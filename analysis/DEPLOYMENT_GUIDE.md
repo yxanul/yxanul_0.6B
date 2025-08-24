@@ -153,9 +153,11 @@ git clone https://github.com/yourusername/yxanul_0.6B.git
 cd yxanul_0.6B
 
 # 5. Download SuperBPE tokenizer (one time)
-python -c "from transformers import AutoTokenizer; \
+# First set your Hugging Face token as environment variable:
+# export HF_TOKEN=your_token_here
+python -c "import os; from transformers import AutoTokenizer; \
 AutoTokenizer.from_pretrained('UW/OLMo2-8B-SuperBPE-t80k', \
-token='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', trust_remote_code=True)"
+token=os.environ.get('HF_TOKEN'), trust_remote_code=True)"
 
 # 6. Start FP8 training with ultra-curriculum
 python train_fp8.py --config configs/fineweb_training_ultra_curriculum.yaml
