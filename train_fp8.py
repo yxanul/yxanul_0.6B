@@ -178,6 +178,12 @@ def main():
             print(f"Curriculum Stages: {len(curriculum_mgr.stages)}")
         print("=" * 60)
     
+    # Get max sequence length from curriculum or config FIRST
+    max_seq_len = training_config.get('data', {}).get('max_sequence_length', 2048)
+    if use_curriculum and curriculum_mgr.stages:
+        # Find the maximum seq_len across all curriculum stages
+        max_seq_len = max(stage.get('seq_len', max_seq_len) for stage in curriculum_mgr.stages)
+    
     # Create FP8-optimized model
     valid_fields = {f.name for f in fields(ModelConfig)}
     filtered_model_config = {k: v for k, v in model_config["model"].items() if k in valid_fields}
@@ -207,12 +213,6 @@ def main():
         print("=" * 60)
     
     # Create tokenizer - Using SuperBPE for 31% token reduction!
-    # Get max sequence length from curriculum or config
-    max_seq_len = training_config.get('data', {}).get('max_sequence_length', 2048)
-    if use_curriculum and curriculum_mgr.stages:
-        # Find the maximum seq_len across all curriculum stages
-        max_seq_len = max(stage.get('seq_len', max_seq_len) for stage in curriculum_mgr.stages)
-    
     tokenizer = create_tokenizer(max_length=max_seq_len)  # Defaults to SuperBPE t=80k
     print(f"Tokenizer max_length set to: {max_seq_len}")
     
