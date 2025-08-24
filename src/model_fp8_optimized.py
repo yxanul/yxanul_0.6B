@@ -175,29 +175,26 @@ class FP8Attention(nn.Module):
                 self.hidden_size, 
                 self.hidden_size,
                 bias=False,
-                params_dtype=torch.bfloat16,  # Weights stored in BF16
-                use_fp8=True  # Compute in FP8
+                params_dtype=torch.bfloat16  # Weights stored in BF16
+                # FP8 is controlled by fp8_autocast context manager, not here
             )
             self.k_proj = te.Linear(
                 self.hidden_size,
                 self.num_kv_heads * self.kv_head_dim,  # 2 heads * head_dim
                 bias=False,
-                params_dtype=torch.bfloat16,
-                use_fp8=True
+                params_dtype=torch.bfloat16
             )
             self.v_proj = te.Linear(
                 self.hidden_size,
                 self.num_kv_heads * self.kv_head_dim,  # 2 heads * head_dim
                 bias=False,
-                params_dtype=torch.bfloat16,
-                use_fp8=True
+                params_dtype=torch.bfloat16
             )
             self.o_proj = te.Linear(
                 self.hidden_size,
                 self.hidden_size,
                 bias=False,
-                params_dtype=torch.bfloat16,
-                use_fp8=True
+                params_dtype=torch.bfloat16
             )
         else:
             # Fallback to BF16
@@ -303,22 +300,19 @@ class FP8FFN(nn.Module):
                 self.hidden_size,
                 self.intermediate_size,
                 bias=False,
-                params_dtype=torch.bfloat16,
-                use_fp8=True  # FP8 compute
+                params_dtype=torch.bfloat16
             )
             self.up_proj = te.Linear(
                 self.hidden_size,
                 self.intermediate_size,
                 bias=False,
-                params_dtype=torch.bfloat16,
-                use_fp8=True
+                params_dtype=torch.bfloat16
             )
             self.down_proj = te.Linear(
                 self.intermediate_size,
                 self.hidden_size,
                 bias=False,
-                params_dtype=torch.bfloat16,
-                use_fp8=True
+                params_dtype=torch.bfloat16
             )
         else:
             # BF16 fallback
