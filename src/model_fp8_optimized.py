@@ -458,15 +458,14 @@ class YxanulFP8Model(nn.Module):
         loss = None
         if labels is not None:
             # Loss computation in FP32 for stability
-            shift_logits = logits[..., :-1, :].contiguous()
-            shift_labels = labels[..., 1:].contiguous()
+            # No shifting needed - dataloader already provides aligned labels
             loss_fct = nn.CrossEntropyLoss()
             
             # Cast to FP32 for loss (critical for numerical stability)
-            shift_logits = shift_logits.float()
+            logits_for_loss = logits.float()
             loss = loss_fct(
-                shift_logits.view(-1, shift_logits.size(-1)),
-                shift_labels.view(-1)
+                logits_for_loss.view(-1, logits_for_loss.size(-1)),
+                labels.view(-1)
             )
         
         return loss, logits  # Return (loss, logits) to match trainer expectations

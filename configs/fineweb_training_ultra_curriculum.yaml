@@ -145,7 +145,7 @@ training:
 # Validation settings
 validation:
   validation_split: 0.05
-  per_device_eval_batch_size: 32
+  per_device_eval_batch_size: 32  # Already multiple of 8
   eval_strategy: "steps"
   metric_for_best_model: "perplexity"
   greater_is_better: false

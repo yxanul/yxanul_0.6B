@@ -282,26 +282,18 @@ class StreamingDataset(IterableDataset):
                             actual_stride = min(self.stride, self.current_seq_length)
                             buffer = buffer[actual_stride:]  # Sliding window
                             
-                            # Create input and labels
-                            input_ids = torch.tensor(chunk[:-1], dtype=torch.long)
-                            labels = torch.tensor(chunk[1:], dtype=torch.long)
+                            # Create full-length input_ids and labels
+                            # Labels are same as input_ids but with first position masked
+                            input_ids = torch.tensor(chunk, dtype=torch.long)
+                            labels = torch.tensor(chunk, dtype=torch.long)
+                            labels[0] = -100  # Mask first position (no previous token to predict from)
                             
-                            # Pad if necessary
-                            if len(input_ids) < self.current_seq_length - 1:
-                                pad_length = self.current_seq_length - 1 - len(input_ids)
-                                input_ids = torch.cat([
-                                    input_ids,
-                                    torch.full((pad_length,), self.tokenizer.pad_token_id, dtype=torch.long)
-                                ])
-                                labels = torch.cat([
-                                    labels,
-                                    torch.full((pad_length,), -100, dtype=torch.long)
-                                ])
+                            # No padding needed since we already have full sequence length
                             
                             yield {
                                 "input_ids": input_ids,
                                 "labels": labels,
-                                "attention_mask": (input_ids != self.tokenizer.pad_token_id).long()
+                                "attention_mask": torch.ones(self.current_seq_length, dtype=torch.long)
                             }
                     
                 except Exception as e:
@@ -356,26 +348,18 @@ class StreamingDataset(IterableDataset):
                     actual_stride = min(self.stride, self.current_seq_length)
                     buffer = buffer[actual_stride:]  # Sliding window with stride
                     
-                    # Create input and labels
-                    input_ids = torch.tensor(chunk[:-1], dtype=torch.long)
-                    labels = torch.tensor(chunk[1:], dtype=torch.long)
+                    # Create full-length input_ids and labels
+                    # Labels are same as input_ids but with first position masked
+                    input_ids = torch.tensor(chunk, dtype=torch.long)
+                    labels = torch.tensor(chunk, dtype=torch.long)
+                    labels[0] = -100  # Mask first position (no previous token to predict from)
                     
-                    # Pad if necessary
-                    if len(input_ids) < self.current_seq_length - 1:
-                        pad_length = self.current_seq_length - 1 - len(input_ids)
-                        input_ids = torch.cat([
-                            input_ids,
-                            torch.full((pad_length,), self.tokenizer.pad_token_id, dtype=torch.long)
-                        ])
-                        labels = torch.cat([
-                            labels,
-                            torch.full((pad_length,), -100, dtype=torch.long)  # -100 is ignored in loss
-                        ])
+                    # No padding needed since we already have full sequence length
                     
                     yield {
                         "input_ids": input_ids,
                         "labels": labels,
-                        "attention_mask": (input_ids != self.tokenizer.pad_token_id).long()
+                        "attention_mask": torch.ones(self.current_seq_length, dtype=torch.long)
                     }
     
     def update_sequence_length(self, step: int, total_steps: int):
@@ -422,26 +406,11 @@ class DataCollator:
 
 
 def fp8_collate_fn(batch):
-    """Custom collate function that ensures FP8 dimension requirements.
-    FP8 needs batch dimension divisible by 8 and hidden dim divisible by 16.
-    """
+    """Simple collate function - no padding needed if batch sizes are multiples of 8."""
     # Stack the batch normally
     input_ids = torch.stack([item['input_ids'] for item in batch])
     labels = torch.stack([item['labels'] for item in batch])
     attention_mask = torch.stack([item['attention_mask'] for item in batch])
-    
-    # Ensure batch dimension is divisible by 8 for FP8
-    batch_size = input_ids.size(0)
-    if batch_size % 8 != 0:
-        pad_size = 8 - (batch_size % 8)
-        # Pad with dummy samples (will be masked out by attention mask)
-        pad_input = torch.zeros(pad_size, input_ids.size(1), dtype=input_ids.dtype)
-        pad_labels = torch.full((pad_size, labels.size(1)), -100, dtype=labels.dtype)
-        pad_mask = torch.zeros(pad_size, attention_mask.size(1), dtype=attention_mask.dtype)
-        
-        input_ids = torch.cat([input_ids, pad_input], dim=0)
-        labels = torch.cat([labels, pad_labels], dim=0)
-        attention_mask = torch.cat([attention_mask, pad_mask], dim=0)
     
     return {
         'input_ids': input_ids,
@@ -482,13 +451,22 @@ def create_dataloader(
         collator = DataCollator(pad_token_id=tokenizer.pad_token_id)
         collate_fn = collator
     
+    # Ensure batch size is multiple of 8 for FP8
+    if batch_size % 8 != 0:
+        print(f"Warning: Batch size {batch_size} not divisible by 8, adjusting to {(batch_size // 8) * 8}")
+        batch_size = (batch_size // 8) * 8
+        if batch_size == 0:
+            batch_size = 8
+    
     dataloader = DataLoader(
         dataset,
         batch_size=batch_size,
         collate_fn=collate_fn,
         num_workers=num_workers,
         pin_memory=True,
-        prefetch_factor=2 if num_workers > 0 else None
+        persistent_workers=True if num_workers > 0 else False,
+        prefetch_factor=4 if num_workers > 0 else None,
+        drop_last=True  # Drop incomplete batches to maintain FP8 requirements
     )
     
     return dataloader, dataset
