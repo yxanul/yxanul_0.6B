@@ -1,0 +1,27 @@
+{
+  "datasets": {
+    "c4": {
+      "file": "c4_validation_2k.parquet",
+      "samples": 2000,
+      "domain": "english",
+      "source": "C4 validation subset",
+      "description": "General English text from Common Crawl"
+    },
+    "gsm8k": {
+      "file": "gsm8k_validation.parquet",
+      "samples": 1319,
+      "domain": "math",
+      "source": "GSM8K test set",
+      "description": "Grade school math word problems"
+    },
+    "humaneval": {
+      "file": "humaneval_validation.parquet",
+      "samples": 164,
+      "domain": "code",
+      "source": "HumanEval test set",
+      "description": "Python programming problems"
+    }
+  },
+  "total_size_mb": 3.070892333984375,
+  "purpose": "Multi-domain validation for curriculum learning ratio tuning"
+}

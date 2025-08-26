@@ -573,7 +573,7 @@ if __name__ == "__main__":
     input_ids = torch.randint(0, config.vocab_size, (batch_size, seq_len)).cuda()
     
     with torch.no_grad():
-        logits, loss = model(input_ids)
+        loss, logits = model(input_ids)
         print(f"\nForward pass successful!")
         print(f"Logits shape: {logits.shape}")
         print(f"Memory allocated: {torch.cuda.memory_allocated() / 1024**3:.2f} GB")

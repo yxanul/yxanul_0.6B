@@ -134,7 +134,7 @@ python train_fp8.py --config configs/fineweb_training_ultra_curriculum.yaml
 
 | GPU | Memory | Training Time | Cost | Tokens/sec |
 |-----|--------|---------------|------|------------|
-| **RTX 4090** | 24GB | 6 hours | $0 (personal) | 60k |
+| **RTX 4090** | 24GB | 6 hours | $0 (personal) | 60k | ##notice we are getting in reality around 16-17k tokens
 | **A100 40GB** | 40GB | 3.5 hours | $5.25 | 100k |
 | **A100 80GB** | 80GB | 2.5 hours | $7.50 | 150k |
 | **H100 80GB** | 80GB | 1.5 hours | $9 | 250k |

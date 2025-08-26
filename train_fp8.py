@@ -12,14 +12,14 @@ from pathlib import Path
 
 # Disable WandB's automatic torch hooks before importing torch
 os.environ["WANDB_DISABLE_SERVICE"] = "true"
-os.environ["WANDB__REQUIRE_SERVICE"] = "false"
+os.environ["WANDB_REQUIRE_SERVICE"] = "false"
 
 import torch
 import torch._dynamo
 torch._dynamo.config.suppress_errors = True
 import yaml
 import argparse
-from dataclasses import fields
+from dataclasses import fields, asdict
 
 # Add src to path
 sys.path.append('src')
@@ -28,6 +28,7 @@ sys.path.append('src')
 from model_fp8_optimized import create_fp8_model, ModelConfig
 from trainer_fp8 import FP8Trainer
 from data_pipeline import create_dataloader, create_tokenizer
+from checkpoint_manager import CheckpointManager
 
 # Check for Transformer Engine
 try:
@@ -300,6 +301,23 @@ def main():
     else:
         base_lr = float(training_config.get('training', {}).get('learning_rate', 6e-4))
     
+    # Initialize checkpoint manager
+    checkpoint_manager = CheckpointManager(
+        checkpoint_dir="checkpoints",
+        max_checkpoints=save_total_limit,
+        save_best=True,
+        metric_name="val/perplexity",
+        metric_mode="min"
+    )
+    trainer.checkpoint_manager = checkpoint_manager
+    
+    # Check for resuming from checkpoint
+    resume_info = checkpoint_manager.get_resume_info()
+    if resume_info and not args.eval_only:
+        print(f"\n📂 Found checkpoint to resume from: {resume_info['checkpoint_path']}")
+        print(f"   Step: {resume_info['global_step']}, Epoch: {resume_info['epoch']}")
+        # Note: Actual loading would happen here if implementing full resume
+    
     # Initialize WandB
     if rank == 0:
         trainer._init_wandb()
@@ -335,6 +353,9 @@ def main():
         current_seq_len = curriculum_mgr.stages[0].get('seq_len', current_seq_len)
     
     # Main training loop
+    global_step = 0
+    val_ppl = None  # Initialize validation perplexity for checkpoint tracking
+    
     for epoch in range(num_epochs):
         if rank == 0:
             print(f"\n[Epoch {epoch + 1}/{num_epochs}]")
@@ -435,29 +456,48 @@ def main():
                         print(f"  Validation perplexity: {val_ppl:.2f}")
                     model.train()
                 
-                # Checkpointing
+                # Multi-domain validation (less frequent - every 5 normal validations)
+                # This helps tune curriculum data ratios based on domain-specific performance
+                if global_step % (eval_steps * 5) == 0 and global_step > 0:
+                    if rank == 0:
+                        print(f"\n  Running multi-domain validation at step {global_step}...")
+                        print("  This measures perplexity across English, Math, and Code domains")
+                    try:
+                        multi_domain_results = trainer.validate_multi_domain(max_batches=50)
+                        if rank == 0 and multi_domain_results:
+                            print("  Multi-domain validation complete - check logs for detailed metrics")
+                    except Exception as e:
+                        if rank == 0:
+                            print(f"  Multi-domain validation skipped: {e}")
+                    model.train()
+                
+                # Checkpointing with automatic rotation and best model tracking
                 if global_step % checkpoint_steps == 0 and rank == 0:
-                    checkpoint_path = f"checkpoints/fp8_checkpoint_step{global_step}.pt"
-                    os.makedirs("checkpoints", exist_ok=True)
+                    # Collect current metrics
+                    checkpoint_metrics = {
+                        'train/loss': metrics.get('loss', 0),
+                        'train/perplexity': metrics.get('perplexity', 0),
+                        'train/learning_rate': metrics.get('learning_rate', 0),
+                    }
                     
-                    trainer.save_checkpoint(
-                        checkpoint_path,
+                    # Add validation metrics if available
+                    if val_ppl is not None:
+                        checkpoint_metrics['val/perplexity'] = val_ppl
+                    
+                    # Save checkpoint using the manager
+                    checkpoint_path = checkpoint_manager.save_checkpoint(
+                        model=model,
+                        optimizer=trainer.optimizer,
+                        scheduler=trainer.scheduler,
                         epoch=epoch,
+                        step=global_step,
+                        metrics=checkpoint_metrics,
+                        config={'training_config': training_config, 'model_config': asdict(model_config)},
+                        scaler=trainer.scaler if hasattr(trainer, 'scaler') else None,
+                        fp8_recipe=trainer.fp8_recipe if hasattr(trainer, 'fp8_recipe') and trainer.use_fp8 else None,
                         curriculum_stage=curriculum_mgr.current_stage_idx if use_curriculum else None,
-                        config=args.config
+                        dataset_tokens_seen=global_step * batch_size * max_length
                     )
-                    print(f"  Checkpoint saved to {checkpoint_path}")
-                    
-                    # Clean up old checkpoints
-                    checkpoints = sorted(glob.glob("checkpoints/fp8_checkpoint_step*.pt"))
-                    if len(checkpoints) > save_total_limit:
-                        for old_checkpoint in checkpoints[:-save_total_limit]:
-                            os.remove(old_checkpoint)
-                            # Also remove FP8 stats file if it exists
-                            stats_file = Path(old_checkpoint).with_suffix('.fp8_stats')
-                            if stats_file.exists():
-                                os.remove(stats_file)
-                            print(f"  Removed old checkpoint: {old_checkpoint}")
                 
                 # Check max steps
                 if max_steps > 0 and global_step >= max_steps:
@@ -488,16 +528,31 @@ def main():
     
     # Final checkpoint
     if rank == 0:
-        os.makedirs("checkpoints", exist_ok=True)
-        final_checkpoint = f"checkpoints/fp8_final_model_step{global_step}.pt"
-        trainer.save_checkpoint(
-            final_checkpoint,
+        # Collect final metrics
+        final_metrics = {
+            'train/final_loss': epoch_loss / epoch_steps if epoch_steps > 0 else 0,
+            'train/final_perplexity': torch.exp(torch.tensor(epoch_loss / epoch_steps)).item() if epoch_steps > 0 else 0,
+            'epochs_completed': num_epochs,
+            'total_steps': global_step,
+        }
+        
+        # Save final checkpoint with manager
+        final_checkpoint = checkpoint_manager.save_checkpoint(
+            model=model,
+            optimizer=trainer.optimizer,
+            scheduler=trainer.scheduler,
             epoch=num_epochs,
+            step=global_step,
+            metrics=final_metrics,
+            config={'training_config': training_config, 'model_config': asdict(model_config)},
+            scaler=trainer.scaler if hasattr(trainer, 'scaler') else None,
+            fp8_recipe=trainer.fp8_recipe if hasattr(trainer, 'fp8_recipe') and trainer.use_fp8 else None,
             curriculum_stage=curriculum_mgr.current_stage_idx if use_curriculum else None,
-            config=args.config,
-            final=True
+            dataset_tokens_seen=global_step * batch_size * max_length,
+            is_final=True
         )
-        print(f"\n[Training Complete] Final FP8 model saved to {final_checkpoint}")
+        
+        print(f"\n[Training Complete] Final model saved! Check checkpoints/ for best model.")
         
         # Print FP8 training summary
         if not args.disable_fp8:

@@ -458,16 +458,25 @@ def create_dataloader(
         if batch_size == 0:
             batch_size = 8
     
-    dataloader = DataLoader(
-        dataset,
-        batch_size=batch_size,
-        collate_fn=collate_fn,
-        num_workers=num_workers,
-        pin_memory=True,
-        persistent_workers=True if num_workers > 0 else False,
-        prefetch_factor=4 if num_workers > 0 else None,
-        drop_last=True  # Drop incomplete batches to maintain FP8 requirements
-    )
+    # Build DataLoader kwargs conditionally for better compatibility
+    dataloader_kwargs = {
+        'dataset': dataset,
+        'batch_size': batch_size,
+        'collate_fn': collate_fn,
+        'num_workers': num_workers,
+        'pin_memory': True,
+        'drop_last': True  # Drop incomplete batches to maintain FP8 requirements
+    }
+    
+    # Only add worker-specific args when using workers
+    if num_workers > 0:
+        dataloader_kwargs['persistent_workers'] = True
+        dataloader_kwargs['prefetch_factor'] = 4
+    else:
+        dataloader_kwargs['persistent_workers'] = False
+        # Don't set prefetch_factor when num_workers is 0
+    
+    dataloader = DataLoader(**dataloader_kwargs)
     
     return dataloader, dataset
 

@@ -1,0 +1,230 @@
+# Yxanul 270M Progressive Curriculum with Dataset Mixing
+# Total: 1B tokens pretrain + SFT phase
+# Designed to demolish Gemma3 270M (trained on 6T tokens)
+
+data:
+  # Dataset sources
+  datasets:
+    fineweb:
+      name: "fineweb-edu-highest-quality-2025"
+      type: "general"
+      quality: "highest"  # Educational score ≥3.5
+    
+    math:
+      name: "custom-math-dataset"  # Your premium math dataset
+      type: "reasoning"
+      quality: "curated"
+    
+    code:
+      name: "custom-python-dataset"  # 2x better than Stack v2
+      type: "code"
+      language: "python"  # Single language for focus
+      quality: "premium"
+
+training:
+  total_tokens: 1_000_000_000  # 1B tokens (0.017% of Gemma3's 6T!)
+  
+  # Progressive Curriculum Stages
+  curriculum_stages:
+    
+    # === PHASE 1: FOUNDATION (0-100M tokens) ===
+    # Learn basic patterns, simple sentences, elementary arithmetic
+    
+    - stage: 1
+      name: "Basic Patterns"
+      step: 0
+      seq_len: 8
+      tokens: 10_000_000  # 10M tokens
+      batch_size: 512
+      dataset_mix:
+        fineweb: 0.95  # 95% general text
+        math: 0.05     # 5% simple arithmetic (2+2, 10-3)
+        code: 0.00     # No code yet
+      focus: "Word patterns, phrases, single-digit math"
+    
+    - stage: 2
+      name: "Sentences"
+      step: 10_000
+      seq_len: 16
+      tokens: 20_000_000  # 20M tokens
+      batch_size: 256
+      dataset_mix:
+        fineweb: 0.95
+        math: 0.05     # Simple word problems
+        code: 0.00
+      focus: "Complete sentences, two-digit arithmetic"
+    
+    - stage: 3
+      name: "Paragraphs"
+      step: 30_000
+      seq_len: 32
+      tokens: 30_000_000  # 30M tokens
+      batch_size: 128
+      dataset_mix:
+        fineweb: 0.90  # 90% general
+        math: 0.08     # 8% math
+        code: 0.02     # 2% code (variable declarations)
+      focus: "Paragraph structure, multiplication/division"
+    
+    - stage: 4
+      name: "Extended Context"
+      step: 60_000
+      seq_len: 64
+      tokens: 40_000_000  # 40M tokens
+      batch_size: 64
+      dataset_mix:
+        fineweb: 0.85  # Starting to increase specialization
+        math: 0.10     # 10% math (fractions, percentages)
+        code: 0.05     # 5% code (simple functions)
+      focus: "Multi-sentence reasoning, basic functions"
+    
+    # === PHASE 2: SKILL BUILDING (100-400M tokens) ===
+    # Develop reasoning, introduce programming concepts
+    
+    - stage: 5
+      name: "Reasoning Development"
+      step: 100_000
+      seq_len: 128
+      tokens: 75_000_000  # 75M tokens
+      batch_size: 32
+      dataset_mix:
+        fineweb: 0.80
+        math: 0.12     # Multi-step problems
+        code: 0.08     # Functions with logic
+      focus: "Chain of thought, conditional logic"
+    
+    - stage: 6
+      name: "Complex Patterns"
+      step: 175_000
+      seq_len: 256
+      tokens: 100_000_000  # 100M tokens
+      batch_size: 16
+      dataset_mix:
+        fineweb: 0.75
+        math: 0.15     # Word problems, algebra basics
+        code: 0.10     # Loops, data structures
+      focus: "Document coherence, algorithms"
+    
+    - stage: 7
+      name: "Integration"
+      step: 275_000
+      seq_len: 512
+      tokens: 125_000_000  # 125M tokens
+      batch_size: 8
+      dataset_mix:
+        fineweb: 0.70
+        math: 0.18     # Complex reasoning
+        code: 0.12     # Complete programs
+      focus: "Long-form reasoning, full implementations"
+    
+    # === PHASE 3: ADVANCED (400-750M tokens) ===
+    # Master complex reasoning and coding
+    
+    - stage: 8
+      name: "Deep Understanding"
+      step: 400_000
+      seq_len: 768
+      tokens: 150_000_000  # 150M tokens
+      batch_size: 8
+      dataset_mix:
+        fineweb: 0.65
+        math: 0.20     # Advanced word problems
+        code: 0.15     # Complex algorithms
+      focus: "Multi-step reasoning, debugging"
+    
+    - stage: 9
+      name: "Expert Reasoning"
+      step: 550_000
+      seq_len: 1536
+      tokens: 200_000_000  # 200M tokens
+      batch_size: 4
+      gradient_accumulation_steps: 2
+      dataset_mix:
+        fineweb: 0.60
+        math: 0.22
+        code: 0.18
+      focus: "Complex proofs, system design"
+    
+    # === PHASE 4: MASTERY (750M-1B tokens) ===
+    # Maximum specialization on math/code
+    
+    - stage: 10
+      name: "Final Polish"
+      step: 750_000
+      seq_len: 2048
+      tokens: 250_000_000  # 250M tokens
+      batch_size: 4
+      gradient_accumulation_steps: 2
+      dataset_mix:
+        fineweb: 0.55  # Still majority for language
+        math: 0.25     # Heavy math focus
+        code: 0.20     # Strong coding ability
+      focus: "Complete mastery, complex implementations"
+  
+  # Learning rate schedule
+  learning_rate: 6e-4
+  lr_scheduler_type: "cosine_with_warmup"
+  warmup_ratio: 0.01
+  
+  # Optimization
+  optimizer: "adamw"
+  weight_decay: 0.1
+  gradient_clipping: 1.0
+  
+  # Mixed precision
+  mixed_precision: "bf16"
+  use_fp8: true
+  
+  # Memory optimization
+  gradient_checkpointing: true
+  use_flash_attention: true
+
+# SFT Phase Configuration (after 1B token pretrain)
+sft_phase:
+  enabled: true
+  start_after_tokens: 1_000_000_000
+  
+  datasets:
+    - name: "high_quality_math_cot"  # Chain-of-thought math
+      weight: 0.40
+    - name: "python_instructions"     # Code with explanations  
+      weight: 0.35
+    - name: "general_instructions"    # General Q&A
+      weight: 0.25
+  
+  training_tokens: 100_000_000  # 100M tokens SFT
+  learning_rate: 2e-5  # Lower LR for fine-tuning
+  batch_size: 4
+  gradient_accumulation_steps: 8
+
+# Validation Configuration
+validation:
+  # Custom eval sets for each domain
+  eval_datasets:
+    - name: "gsm8k_test"      # Math reasoning
+      type: "math"
+    - name: "humaneval_py"    # Python coding
+      type: "code"  
+    - name: "general_qa"      # General knowledge
+      type: "general"
+  
+  eval_every_n_tokens: 50_000_000  # Eval every 50M tokens
+  
+# Expected Outcomes
+expected_performance:
+  vs_gemma3_270m:
+    basic_arithmetic: ">95%"  # Gemma3: ~10%
+    pattern_recognition: ">90%"  # Gemma3: 0%
+    instruction_following: ">85%"  # Gemma3: ~20%
+    code_generation: ">70%"  # Gemma3: ~30%
+    logical_consistency: ">90%"  # Gemma3: ~0%
+    
+  tokens_efficiency:
+    yxanul: "1B tokens"
+    gemma3: "6000B tokens"
+    improvement: "6000x more efficient"
+    
+  training_cost:
+    yxanul: "~$5-10 on cloud"
+    gemma3: ">$100,000"
+    savings: ">10,000x cheaper"

@@ -112,6 +112,9 @@ class EnhancedTrainer(OptimizedTrainer):
             else:
                 print("    Skipping wandb.watch() due to torch.compile compatibility")
             
+            # Store wandb run for later use in validation logging
+            self.wandb_run = wandb.run
+            
             print(f"[OK] WandB initialized with comprehensive monitoring")
             print(f"    Project: {project_name}")
             print(f"    Tracking {total_params/1e6:.1f}M parameters")
@@ -119,6 +122,7 @@ class EnhancedTrainer(OptimizedTrainer):
         except Exception as e:
             print(f"[WARNING] WandB initialization failed: {e}")
             print("    Training will continue without WandB logging")
+            self.wandb_run = None
     
     def train_step(self, batch: Dict[str, torch.Tensor]) -> Dict[str, float]:
         """Enhanced training step with comprehensive monitoring."""
@@ -477,6 +481,58 @@ class EnhancedTrainer(OptimizedTrainer):
             
             return perplexity
         return None
+    
+    def validate_multi_domain(self, max_batches: int = 50):
+        """Run multi-domain validation to measure domain-specific performance."""
+        try:
+            from multi_domain_validation import MultiDomainValidator
+            
+            print("\n" + "="*60)
+            print("Starting Multi-Domain Validation")
+            print("="*60)
+            
+            # Create validator
+            validator = MultiDomainValidator(
+                tokenizer=self.tokenizer,
+                batch_size=self.config.get('validation', {}).get('per_device_eval_batch_size', 32),
+                max_samples_per_domain=1000
+            )
+            
+            # Run validation on all domains
+            results = validator.validate_all_domains(
+                model=self.model,
+                max_batches=max_batches,
+                device=self.device
+            )
+            
+            # Print summary
+            validator.print_summary(results)
+            
+            # Log to WandB if available
+            if self.local_rank == 0 and hasattr(self, 'wandb_run') and self.wandb_run:
+                import wandb
+                wandb_metrics = {}
+                
+                for domain in validator.domains:
+                    if domain in results and 'error' not in results[domain]:
+                        for key, value in results[domain].items():
+                            if key != 'domain' and isinstance(value, (int, float)):
+                                wandb_metrics[f"val/{domain}_{key}"] = value
+                
+                if 'aggregate' in results:
+                    for key, value in results['aggregate'].items():
+                        if isinstance(value, (int, float)):
+                            wandb_metrics[f"val/aggregate_{key}"] = value
+                
+                wandb.log(wandb_metrics, step=self.global_step)
+            
+            return results
+            
+        except Exception as e:
+            print(f"Multi-domain validation failed: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
     
     def log_epoch_summary(self, epoch: int, epoch_metrics: Dict):
         """Log comprehensive epoch summary to WandB."""

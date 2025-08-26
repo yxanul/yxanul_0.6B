@@ -200,6 +200,35 @@ class FP8Trainer(EnhancedTrainer):
         
         return result
     
+    def validate_multi_domain(self, max_batches: int = 50):
+        """Multi-domain validation with FP8 support."""
+        
+        # Determine if we should use FP8
+        use_fp8_now = self.use_fp8 and self.fp8_recipe and (self.global_step >= getattr(self, "fp8_calibration_steps", 0))
+        
+        if use_fp8_now:
+            # Store original forward
+            original_forward = self.model.forward
+            
+            # Wrap with FP8 context for multi-domain validation
+            def fp8_forward(*args, **kwargs):
+                with te.fp8_autocast(enabled=True, fp8_recipe=self.fp8_recipe):
+                    kwargs['fp8_recipe'] = self.fp8_recipe
+                    return original_forward(*args, **kwargs)
+            
+            self.model.forward = fp8_forward
+            
+            # Call parent multi-domain validation
+            result = super().validate_multi_domain(max_batches)
+            
+            # Restore original forward
+            self.model.forward = original_forward
+        else:
+            # Just use parent multi-domain validation
+            result = super().validate_multi_domain(max_batches)
+        
+        return result
+    
     def save_checkpoint(self, path: str, **kwargs):
         """Save checkpoint with FP8 state."""
         # Add FP8-specific state
