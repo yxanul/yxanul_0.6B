@@ -1,0 +1,124 @@
+# TransformerEngine v2.4 Configuration for Yxanul
+# Optimized for NGC 25.05+ with Flash Attention 3
+
+model:
+  name: "Yxanul-197M-TEv2"
+  vocab_size: 200005  # SuperBPE tokenizer
+  hidden_size: 768
+  intermediate_size: 2048  # 2.67x hidden for SwiGLU
+  num_hidden_layers: 28
+  num_attention_heads: 12
+  num_kv_heads: 2  # GQA with 6:1 ratio
+  head_dim: 64
+  max_position_embeddings: 4096
+  rope_theta: 10000.0
+  
+  # TE v2.4 specific
+  use_fp8: true
+  params_dtype: "bfloat16"
+  fuse_qkv_params: true  # Fused QKV for better memory access
+  use_flash_attention: true  # Will use FA3 on NGC 25.05+
+  
+  # Factorized embeddings (Gemma-style)
+  use_factorized_embedding: true
+  factorization_dim: 128
+  
+  # Regularization
+  hidden_dropout: 0.0  # No dropout for small model
+  attention_dropout: 0.0
+  
+  # Normalization
+  layernorm_epsilon: 1.0e-6
+  zero_centered_gamma: false  # Standard RMSNorm
+
+training:
+  # FP8 Configuration (TE v2.4)
+  fp8:
+    enabled: true
+    format: "hybrid"  # Options: "hybrid", "e4m3" (MXFP8 requires Blackwell GPUs)
+    calibration_steps: 10
+    # TE v2.4 recipe parameters
+    amax_history_len: 16  # Shorter for better responsiveness
+    amax_compute_algo: "max"
+    reduce_amax: true  # Better for multi-GPU
+    fp8_dpa: true  # FP8 attention on H100
+  
+  # Optimizer
+  optimizer:
+    type: "AdamW"
+    learning_rate: 6.0e-4  # 20% higher for FP8
+    weight_decay: 0.01
+    beta1: 0.9
+    beta2: 0.95
+    eps: 1.0e-8
+    
+  # Scheduler
+  scheduler:
+    type: "cosine"
+    warmup_steps: 1000
+    min_lr_ratio: 0.1
+    
+  # Training parameters
+  batch_size: 32
+  gradient_accumulation_steps: 1
+  max_steps: 100000
+  num_epochs: 3
+  max_grad_norm: 1.0
+  
+  # Evaluation
+  eval_steps: 2000
+  save_steps: 10000
+  logging_steps: 100
+  
+  # Checkpointing
+  checkpoint_dir: "checkpoints_te_v2"
+  save_total_limit: 3
+  save_best_model: true
+  metric_for_best_model: "val/perplexity"
+  
+  # Multi-domain validation
+  multi_domain_validation:
+    enabled: true
+    frequency: 5  # Every 5 normal validations
+    max_batches: 50
+    domains:
+      - english  # C4
+      - math     # GSM8K
+      - code     # HumanEval
+
+data:
+  dataset_name: "fineweb-edu-highest-quality-2025"
+  tokenizer: "superbpe_t80k"  # Fast variant
+  max_length: 2048
+  num_workers: 4
+  
+  # Data mix for curriculum
+  data_mix:
+    fineweb: 0.7
+    math: 0.15
+    code: 0.15
+
+performance_expectations:
+  # On H100 with NGC 25.05+ and TE v2.4
+  h100:
+    tokens_per_sec: 150000  # Expected with FP8
+    memory_usage_gb: 5.0
+    time_to_1b_tokens_hours: 1.85
+    
+  # On A100 with NGC 25.05+
+  a100:
+    tokens_per_sec: 100000
+    memory_usage_gb: 6.0
+    time_to_1b_tokens_hours: 2.78
+    
+  # Comparison with old implementation
+  speedup_vs_old: 1.45  # 45% faster
+  memory_reduction: 0.20  # 20% less memory
+
+notes:
+  - "TE v2.4 native TransformerLayer replaces custom attention/FFN"
+  - "Flash Attention 3 automatically selected on compatible GPUs"
+  - "Proper fp8_autocast usage (backward outside context)"
+  - "Native GQA, RMSNorm, and SwiGLU support"
+  - "MXFP8 format only available on Blackwell GPUs (B100, B200, GB200)"
+  - "Ensure NGC 25.05+ for TransformerEngine v2.3+"
