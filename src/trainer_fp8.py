@@ -39,6 +39,12 @@ class FP8Trainer(EnhancedTrainer):
         
         self.use_fp8 = use_fp8 and TRANSFORMER_ENGINE_AVAILABLE
         
+        # Initialize gradient accumulation steps from config
+        if hasattr(self, 'config') and self.config:
+            self.gradient_accumulation_steps = self.config.get('training', {}).get('gradient_accumulation_steps', 1)
+        else:
+            self.gradient_accumulation_steps = 1
+        
         # Enable TF32 for Ada/Hopper GPUs (significant speedup)
         if torch.cuda.is_available():
             torch.backends.cuda.matmul.allow_tf32 = True
