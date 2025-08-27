@@ -60,7 +60,12 @@ class TEv2Trainer(EnhancedTrainer):
         batch_size: int = 1,
         **kwargs
     ):
-        # Initialize base trainer
+        # Extract our specific parameters that parent class doesn't need
+        self.warmup_steps = kwargs.pop('warmup_steps', 1000)
+        self.num_training_steps = kwargs.pop('num_training_steps', None)
+        self.max_grad_norm = kwargs.pop('max_grad_norm', 1.0)
+        
+        # Initialize base trainer with remaining kwargs
         super().__init__(model, config_path, stage, local_rank, **kwargs)
         
         if not TE_AVAILABLE:
@@ -73,7 +78,6 @@ class TEv2Trainer(EnhancedTrainer):
         self.gradient_accumulation_steps = gradient_accumulation_steps
         self.learning_rate = learning_rate
         self.batch_size = batch_size
-        self.max_grad_norm = kwargs.get('max_grad_norm', 1.0)  # Default gradient clipping
         self.global_step = 0  # Initialize global step counter
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         
@@ -88,16 +92,14 @@ class TEv2Trainer(EnhancedTrainer):
             weight_decay=0.1
         )
         
-        # Initialize scheduler with linear warmup + cosine decay
-        self.warmup_steps = kwargs.get('warmup_steps', 1000)
-        # Calculate proper num_training_steps based on dataset
-        # For 1B tokens with batch_size=1, seq_len=2048, grad_accum=32:
-        # tokens_per_step = 1 * 2048 * 32 = 65536
-        # total_steps = 1e9 / 65536 = ~15,258 steps
-        tokens_per_step = self.batch_size * 2048 * self.gradient_accumulation_steps
-        default_total_steps = int(1e9 / tokens_per_step)  # For 1B token dataset
-        self.num_training_steps = kwargs.get('num_training_steps', default_total_steps)
-        print(f"Training steps calculated: {self.num_training_steps} (for 1B tokens)")
+        # Calculate proper num_training_steps if not provided
+        if self.num_training_steps is None:
+            # For 1B tokens with batch_size=1, seq_len=2048, grad_accum=32:
+            # tokens_per_step = 1 * 2048 * 32 = 65536
+            # total_steps = 1e9 / 65536 = ~15,258 steps
+            tokens_per_step = self.batch_size * 2048 * self.gradient_accumulation_steps
+            self.num_training_steps = int(1e9 / tokens_per_step)  # For 1B token dataset
+        print(f"Training steps: {self.num_training_steps} (warmup: {self.warmup_steps})")
         
         # Use linear warmup followed by cosine decay
         from torch.optim.lr_scheduler import LambdaLR
