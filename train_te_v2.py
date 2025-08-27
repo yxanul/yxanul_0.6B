@@ -155,6 +155,14 @@ def load_config(args):
             if 'model' in file_config:
                 for key, value in file_config['model'].items():
                     if hasattr(config, key):
+                        # Special handling for dtype strings
+                        if key == 'params_dtype' and isinstance(value, str):
+                            if value == 'bfloat16':
+                                value = torch.bfloat16
+                            elif value == 'float16':
+                                value = torch.float16
+                            elif value == 'float32':
+                                value = torch.float32
                         setattr(config, key, value)
     
     return config
