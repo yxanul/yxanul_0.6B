@@ -220,7 +220,9 @@ def main():
                 fp8_format=Format.E4M3,
                 amax_history_len=16,
                 amax_compute_algo="max",
-                reduce_amax=True
+                reduce_amax=True,
+                fp8_dpa=False,  # Disable FP8 for attention (avoids cuDNN kernel issues)
+                fp8_mha=False   # Disable FP8 for multi-head attention
             )
         else:  # hybrid (default)
             fp8_recipe = DelayedScaling(
@@ -228,9 +230,11 @@ def main():
                 amax_history_len=16,
                 amax_compute_algo="max",
                 reduce_amax=True,
-                fp8_dpa=True  # FP8 attention if supported
+                fp8_dpa=False,  # Run attention in BF16 to avoid cuDNN FP8 kernel issues
+                fp8_mha=False   # Run multi-head attention in BF16
             )
         print(f"Created FP8 recipe: {args.fp8_format} format")
+        print("Note: FP8 disabled for attention layers (using BF16) to avoid cuDNN issues")
     
     # Create model with the same recipe
     print("\nCreating TE v2.4 model...")

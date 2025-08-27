@@ -390,7 +390,9 @@ if __name__ == "__main__":
             fp8_recipe = DelayedScaling(
                 fp8_format=Format.HYBRID,
                 amax_history_len=16,
-                amax_compute_algo="max"
+                amax_compute_algo="max",
+                fp8_dpa=False,  # Run attention in BF16
+                fp8_mha=False   # Run MHA in BF16
             )
             
             with te_pytorch.fp8_autocast(enabled=True, fp8_recipe=fp8_recipe):

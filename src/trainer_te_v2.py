@@ -107,17 +107,21 @@ class TEv2Trainer(EnhancedTrainer):
                 fp8_format=Format.E4M3,
                 amax_history_len=16,  # Shorter history per TE v2.4 docs
                 amax_compute_algo="max",
-                reduce_amax=True  # Better for multi-GPU
+                reduce_amax=True,  # Better for multi-GPU
+                fp8_dpa=False,  # Disable FP8 for attention (avoids cuDNN kernel issues)
+                fp8_mha=False   # Disable FP8 for multi-head attention
             )
         else:  # hybrid (default)
             # E4M3 forward, E5M2 backward
             print("Using hybrid format (E4M3 forward, E5M2 backward)")
+            print("Note: FP8 disabled for attention layers (using BF16) to avoid cuDNN issues")
             return DelayedScaling(
                 fp8_format=Format.HYBRID,
                 amax_history_len=16,
                 amax_compute_algo="max",
                 reduce_amax=True,
-                fp8_dpa=True  # FP8 attention if supported (H100)
+                fp8_dpa=False,  # Run attention in BF16 to avoid cuDNN FP8 kernel issues
+                fp8_mha=False   # Run multi-head attention in BF16
             )
     
     def _adjust_optimizer_for_fp8(self):
