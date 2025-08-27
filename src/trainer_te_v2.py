@@ -55,9 +55,9 @@ class TEv2Trainer(EnhancedTrainer):
         fp8_format: str = "hybrid",  # "hybrid", "e4m3", or "mxfp8"
         fp8_recipe=None,  # Optionally pass pre-created recipe
         calibration_steps: int = 64,  # More calibration for FP8 stability
-        gradient_accumulation_steps: int = 32,
+        gradient_accumulation_steps: int = 32,  # High for effective batch size
         learning_rate: float = 2e-4,  # Conservative for 270M model
-        batch_size: int = 1,
+        batch_size: int = 1,  # Must be 1 for 200k vocab
         **kwargs
     ):
         # Extract our specific parameters that parent class doesn't need

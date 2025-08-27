@@ -54,10 +54,10 @@ def parse_args():
                        choices=['197M', '270M'], help='Model size preset')
     
     # Training configuration
-    parser.add_argument('--batch-size', type=int, default=2,
-                       help='Batch size per GPU (2 is safe with gradient accumulation)')
-    parser.add_argument('--gradient-accumulation', type=int, default=16,
-                       help='Gradient accumulation steps (16 with batch=2 for effective 32)')
+    parser.add_argument('--batch-size', type=int, default=1,
+                       help='Batch size per GPU (1 required for 200k vocab)')
+    parser.add_argument('--gradient-accumulation', type=int, default=32,
+                       help='Gradient accumulation steps (32 with batch=1 for effective 32)')
     parser.add_argument('--learning-rate', type=float, default=2e-4,
                        help='Learning rate (2e-4 is conservative for 270M)')
     parser.add_argument('--num-epochs', type=int, default=3,
