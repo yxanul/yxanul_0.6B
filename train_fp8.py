@@ -95,6 +95,11 @@ class CurriculumManager:
         stage = self.get_stage_for_step(global_step)
         return stage.get('lr_scale', 1.0) if stage else 1.0
     
+    def apply_lr_scale(self, optimizer, scale):
+        """Apply learning rate scale to optimizer."""
+        for param_group in optimizer.param_groups:
+            param_group['lr'] = param_group['initial_lr'] * scale
+    
     def get_grad_clip(self, global_step):
         """Get gradient clipping value for current stage."""
         stage = self.get_stage_for_step(global_step)
@@ -271,11 +276,14 @@ def main():
         if not args.disable_fp8:
             val_batch_size = int(val_batch_size * 1.3)  # Larger batches for validation too
         
+        # Use the same sequence length as current curriculum stage for consistency
+        val_seq_len = initial_seq_len if use_curriculum else training_config.get('data', {}).get('max_sequence_length', 2048)
+        
         val_dataloader, _ = create_dataloader(
             dataset_name=training_config.get('data', {}).get('dataset_name'),
             tokenizer=tokenizer,
             batch_size=val_batch_size,
-            max_length=training_config.get('data', {}).get('max_sequence_length', 2048),
+            max_length=val_seq_len,  # Match training sequence length
             stage_config=training_config,
             num_workers=2,
             split=f'train[{int((1-val_split)*100)}%:]'
@@ -341,7 +349,17 @@ def main():
     if resume_info and not args.eval_only:
         print(f"\n📂 Found checkpoint to resume from: {resume_info['checkpoint_path']}")
         print(f"   Step: {resume_info['global_step']}, Epoch: {resume_info['epoch']}")
-        # Note: Actual loading would happen here if implementing full resume
+        
+        # Load the checkpoint
+        checkpoint = trainer.load_checkpoint(resume_info['checkpoint_path'])
+        start_step = resume_info['global_step']
+        
+        # Restore curriculum stage if using curriculum
+        if use_curriculum and 'curriculum_stage' in resume_info and resume_info['curriculum_stage'] is not None:
+            curriculum_mgr.current_stage_idx = resume_info['curriculum_stage']
+            print(f"   Curriculum stage: {curriculum_mgr.current_stage_idx + 1}/{len(curriculum_mgr.stages)}")
+        
+        print(f"✓ Resumed training from step {start_step}")
     
     # Initialize WandB
     if rank == 0:
@@ -412,6 +430,30 @@ def main():
                             print(f"  Gradient clip: {stage.get('grad_clip', 1.0)}")
                             print(f"  Gradient accumulation: {stage.get('gradient_accumulation_steps', 1)} steps")
                         
+                        # Calculate gradient accumulation to keep effective batch size constant
+                        old_effective_batch = current_batch_size * training_config.get('training', {}).get('gradient_accumulation_steps', 1)
+                        new_grad_accum = max(1, old_effective_batch // new_batch_size)
+                        
+                        # Apply learning rate scale
+                        lr_scale = stage.get('lr_scale', 1.0)
+                        if lr_scale != 1.0:
+                            # Store initial LR if not already stored
+                            for param_group in trainer.optimizer.param_groups:
+                                if 'initial_lr' not in param_group:
+                                    param_group['initial_lr'] = param_group['lr']
+                                param_group['lr'] = param_group['initial_lr'] * lr_scale
+                            print(f"  Applied LR scale: {lr_scale}x (new LR: {trainer.optimizer.param_groups[0]['lr']:.2e})")
+                        
+                        # Add FP8 calibration window after major changes
+                        if trainer.use_fp8 and (new_seq_len > current_seq_len * 1.5 or new_batch_size != current_batch_size):
+                            print(f"  FP8 calibration: Disabling FP8 for 300 steps")
+                            trainer.fp8_calibration_steps = 300
+                            trainer.fp8_calibration_start = global_step
+                        
+                        # Update gradient accumulation in trainer config
+                        trainer.gradient_accumulation_steps = new_grad_accum
+                        print(f"  Gradient accumulation adjusted to {new_grad_accum} (effective batch: {new_batch_size * new_grad_accum})")
+                        
                         # Recreate dataloader with new batch size AND sequence length!
                         train_dataloader, train_dataset = create_dataloader(
                             dataset_name=training_config.get('data', {}).get('dataset_name'),
@@ -425,6 +467,20 @@ def main():
                         trainer.train_dataloader = train_dataloader
                         current_batch_size = new_batch_size
                         current_seq_len = new_seq_len
+                        
+                        # Also update validation dataloader to match new sequence length
+                        if val_dataloader is not None:
+                            val_batch_size = training_config.get('validation', {}).get('per_device_eval_batch_size', 1)
+                            val_dataloader, _ = create_dataloader(
+                                dataset_name=training_config.get('data', {}).get('dataset_name'),
+                                tokenizer=tokenizer,
+                                batch_size=val_batch_size,
+                                max_length=new_seq_len,  # Match new training sequence length
+                                stage_config=training_config,
+                                num_workers=2,
+                                split=f'train[{int((1-val_split)*100)}%:]'
+                            )
+                            print(f"  Validation dataloader updated to seq_len={new_seq_len}")
                         
                         # Update learning rate
                         lr_scale = float(stage.get('lr_scale', 1.0))
@@ -481,20 +537,10 @@ def main():
                         print(f"  Validation perplexity: {val_ppl:.2f}")
                     model.train()
                 
-                # Multi-domain validation (less frequent - every 5 normal validations)
-                # This helps tune curriculum data ratios based on domain-specific performance
-                if global_step % (eval_steps * 5) == 0 and global_step > 0:
-                    if rank == 0:
-                        print(f"\n  Running multi-domain validation at step {global_step}...")
-                        print("  This measures perplexity across English, Math, and Code domains")
-                    try:
-                        multi_domain_results = trainer.validate_multi_domain(max_batches=100)
-                        if rank == 0 and multi_domain_results:
-                            print("  Multi-domain validation complete - check logs for detailed metrics")
-                    except Exception as e:
-                        if rank == 0:
-                            print(f"  Multi-domain validation skipped: {e}")
-                    model.train()
+                # Multi-domain validation disabled during pretraining to avoid OOM
+                # Enable this after pretraining for domain-specific performance analysis
+                # if global_step % (eval_steps * 5) == 0 and global_step > 0:
+                #     trainer.validate_multi_domain(max_batches=100)
                 
                 # Checkpointing with automatic rotation and best model tracking
                 if global_step % checkpoint_steps == 0 and rank == 0:

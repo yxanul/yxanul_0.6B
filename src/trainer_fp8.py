@@ -105,8 +105,15 @@ class FP8Trainer(EnhancedTrainer):
     def train_step(self, batch: Dict[str, torch.Tensor]) -> Dict[str, float]:
         """Training step with FP8 support - EXTENDS parent monitoring."""
         
+        # Check if we're in FP8 calibration window (temporarily disable FP8 after curriculum changes)
+        in_calibration = False
+        if hasattr(self, 'fp8_calibration_steps') and hasattr(self, 'fp8_calibration_start'):
+            steps_since_change = self.global_step - self.fp8_calibration_start
+            if steps_since_change < self.fp8_calibration_steps:
+                in_calibration = True
+        
         # Determine if we should use FP8 for this step
-        use_fp8_now = self.use_fp8 and self.fp8_recipe and (self.global_step >= getattr(self, "fp8_calibration_steps", 0))
+        use_fp8_now = self.use_fp8 and self.fp8_recipe and not in_calibration and (self.global_step >= getattr(self, "fp8_warmup_steps", 0))
         
         # Get attention mask if available
         attention_mask = batch.get('attention_mask', None)

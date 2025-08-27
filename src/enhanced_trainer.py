@@ -333,6 +333,28 @@ class EnhancedTrainer(OptimizedTrainer):
                     metrics[f"activations/{name}/{stat_name}"] = value
             self.activation_stats.clear()  # Clear after logging
         
+        # Track loss statistics for outlier detection
+        if not hasattr(self, 'loss_history'):
+            self.loss_history = []
+        self.loss_history.append(loss.item())
+        
+        # Keep only last 200 steps for rolling statistics
+        if len(self.loss_history) > 200:
+            self.loss_history = self.loss_history[-200:]
+        
+        # Calculate rolling statistics
+        if len(self.loss_history) >= 10:
+            import numpy as np
+            recent_losses = self.loss_history[-50:] if len(self.loss_history) >= 50 else self.loss_history
+            metrics["train/loss_median"] = float(np.median(recent_losses))
+            metrics["train/loss_std"] = float(np.std(recent_losses))
+            
+            # Check for outliers (loss > median + 2*std)
+            if loss.item() > metrics["train/loss_median"] + 2 * metrics["train/loss_std"]:
+                metrics["train/loss_outlier"] = 1.0
+                if self.global_step % 100 == 0:  # Only warn every 100 steps to avoid spam
+                    print(f"⚠️  Loss outlier detected: {loss.item():.4f} (median: {metrics['train/loss_median']:.4f})")
+        
         # Update global step
         self.global_step += 1
         
@@ -493,6 +515,36 @@ class EnhancedTrainer(OptimizedTrainer):
             
             return perplexity
         return None
+    
+    def load_checkpoint(self, path: str):
+        """Load model checkpoint - base implementation."""
+        checkpoint = torch.load(path, map_location=self.device)
+        
+        # Load model state
+        if 'model_state_dict' in checkpoint:
+            self.model.load_state_dict(checkpoint['model_state_dict'])
+        
+        # Load optimizer state
+        if 'optimizer_state_dict' in checkpoint and hasattr(self, 'optimizer'):
+            self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        
+        # Load scheduler state
+        if 'scheduler_state_dict' in checkpoint and hasattr(self, 'scheduler'):
+            self.scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+        
+        # Load scaler state if using mixed precision
+        if 'scaler_state_dict' in checkpoint and hasattr(self, 'scaler'):
+            self.scaler.load_state_dict(checkpoint['scaler_state_dict'])
+        
+        # Update step count
+        if 'global_step' in checkpoint:
+            self.global_step = checkpoint['global_step']
+        
+        print(f"✓ Checkpoint loaded from {path}")
+        if 'global_step' in checkpoint:
+            print(f"  Resuming from step {checkpoint['global_step']}")
+        
+        return checkpoint
     
     def validate_multi_domain(self, max_batches: int = 50):
         """Run multi-domain validation to measure domain-specific performance."""
