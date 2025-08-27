@@ -44,7 +44,7 @@ class ModelConfig:
     
     # Attention configuration
     num_attention_heads: int = 10  # 10 heads * 64 = 640
-    num_kv_heads: int = 3  # For GQA with ~3:1 ratio
+    num_kv_heads: int = 2  # For GQA with 5:1 ratio (10/2=5, must divide evenly!)
     head_dim: int = 64  # Always 64
     
     # Positional encoding
