@@ -55,8 +55,8 @@ class TEv2Trainer(EnhancedTrainer):
         fp8_format: str = "hybrid",  # "hybrid", "e4m3", or "mxfp8"
         fp8_recipe=None,  # Optionally pass pre-created recipe
         calibration_steps: int = 64,  # More calibration for FP8 stability
-        gradient_accumulation_steps: int = 1,
-        learning_rate: float = 6e-4,
+        gradient_accumulation_steps: int = 32,
+        learning_rate: float = 2e-4,  # Conservative for 270M model
         batch_size: int = 1,
         **kwargs
     ):
@@ -90,7 +90,14 @@ class TEv2Trainer(EnhancedTrainer):
         
         # Initialize scheduler with linear warmup + cosine decay
         self.warmup_steps = kwargs.get('warmup_steps', 1000)
-        self.num_training_steps = kwargs.get('num_training_steps', 10000)
+        # Calculate proper num_training_steps based on dataset
+        # For 1B tokens with batch_size=1, seq_len=2048, grad_accum=32:
+        # tokens_per_step = 1 * 2048 * 32 = 65536
+        # total_steps = 1e9 / 65536 = ~15,258 steps
+        tokens_per_step = self.batch_size * 2048 * self.gradient_accumulation_steps
+        default_total_steps = int(1e9 / tokens_per_step)  # For 1B token dataset
+        self.num_training_steps = kwargs.get('num_training_steps', default_total_steps)
+        print(f"Training steps calculated: {self.num_training_steps} (for 1B tokens)")
         
         # Use linear warmup followed by cosine decay
         from torch.optim.lr_scheduler import LambdaLR
@@ -169,6 +176,51 @@ class TEv2Trainer(EnhancedTrainer):
         """Keep LR unchanged for FP8 - rely on warmup for stability"""
         print(f"FP8 enabled; keeping LR at {self.optimizer.param_groups[0]['lr']:.2e}")
         print("Using warmup scheduler for stable training start")
+    
+    def _compute_gradient_stats(self) -> Dict[str, float]:
+        """Compute gradient statistics for monitoring."""
+        try:
+            total_norm = 0.0
+            grad_values = []
+            
+            for p in self.model.parameters():
+                if p.grad is not None:
+                    param_norm = p.grad.data.norm(2).item()
+                    total_norm += param_norm ** 2
+                    grad_values.append(p.grad.data.abs().max().item())
+            
+            total_norm = total_norm ** 0.5
+            
+            if grad_values:
+                return {
+                    "total_norm": total_norm,
+                    "max_grad": max(grad_values),
+                    "min_grad": min(grad_values) if grad_values else 0,
+                }
+        except Exception:
+            pass
+        return None
+    
+    def _compute_weight_stats(self) -> Dict[str, float]:
+        """Compute model weight statistics."""
+        try:
+            weight_values = []
+            
+            for name, p in self.model.named_parameters():
+                if 'weight' in name and p.data is not None:
+                    weight_values.extend(p.data.cpu().numpy().flatten())
+            
+            if weight_values:
+                weight_array = np.array(weight_values)
+                return {
+                    "mean": float(np.mean(weight_array)),
+                    "std": float(np.std(weight_array)),
+                    "max": float(np.max(weight_array)),
+                    "min": float(np.min(weight_array)),
+                }
+        except Exception:
+            pass
+        return None
     
     def train_step(self, batch: Dict[str, torch.Tensor]) -> Dict[str, float]:
         """
@@ -273,21 +325,102 @@ class TEv2Trainer(EnhancedTrainer):
             "global_step": self.global_step,
         }
         
-        # Log to WandB if available
+        # Enhanced WandB logging with comprehensive metrics
         try:
             import wandb
             if wandb.run is not None:
-                wandb.log({
+                # Basic training metrics
+                log_dict = {
                     "train/loss": metrics["loss"],
                     "train/perplexity": metrics["perplexity"],
                     "train/accuracy": metrics["accuracy"],
                     "train/learning_rate": metrics["learning_rate"],
                     "train/tokens_per_second": metrics["tokens_per_second"],
-                    "train/gpu_memory_gb": torch.cuda.memory_allocated() / 1e9 if torch.cuda.is_available() else 0,
-                    "train/gpu_utilization": torch.cuda.utilization() if torch.cuda.is_available() and hasattr(torch.cuda, 'utilization') else 0,
-                }, step=self.global_step)
+                    "train/step_time": metrics["step_time"],
+                }
+                
+                # GPU metrics
+                if torch.cuda.is_available():
+                    log_dict.update({
+                        "gpu/memory_allocated_gb": torch.cuda.memory_allocated() / 1e9,
+                        "gpu/memory_reserved_gb": torch.cuda.memory_reserved() / 1e9,
+                        "gpu/memory_utilization": (torch.cuda.memory_allocated() / torch.cuda.memory_reserved()) * 100 if torch.cuda.memory_reserved() > 0 else 0,
+                        "gpu/max_memory_allocated_gb": torch.cuda.max_memory_allocated() / 1e9,
+                    })
+                    
+                    # Try to get GPU utilization (may not be available on all systems)
+                    try:
+                        import pynvml
+                        pynvml.nvmlInit()
+                        handle = pynvml.nvmlDeviceGetHandleByIndex(torch.cuda.current_device())
+                        gpu_util = pynvml.nvmlDeviceGetUtilizationRates(handle)
+                        log_dict.update({
+                            "gpu/utilization": gpu_util.gpu,
+                            "gpu/memory_utilization_percent": gpu_util.memory,
+                        })
+                        
+                        # Temperature monitoring
+                        temp = pynvml.nvmlDeviceGetTemperature(handle, pynvml.NVML_TEMPERATURE_GPU)
+                        log_dict["gpu/temperature"] = temp
+                        
+                        # Power draw
+                        power = pynvml.nvmlDeviceGetPowerUsage(handle) / 1000.0  # Convert to watts
+                        log_dict["gpu/power_watts"] = power
+                    except:
+                        pass  # NVML not available
+                
+                # Gradient statistics (every 100 steps to avoid overhead)
+                if self.global_step % 100 == 0:
+                    grad_stats = self._compute_gradient_stats()
+                    if grad_stats:
+                        log_dict.update({
+                            "gradients/norm": grad_stats["total_norm"],
+                            "gradients/max": grad_stats["max_grad"],
+                            "gradients/min": grad_stats["min_grad"],
+                        })
+                
+                # Model weight statistics (every 500 steps)
+                if self.global_step % 500 == 0:
+                    weight_stats = self._compute_weight_stats()
+                    if weight_stats:
+                        log_dict.update({
+                            "weights/mean": weight_stats["mean"],
+                            "weights/std": weight_stats["std"],
+                            "weights/max": weight_stats["max"],
+                            "weights/min": weight_stats["min"],
+                        })
+                
+                # FP8 specific metrics
+                if self.use_fp8:
+                    log_dict.update({
+                        "fp8/calibrating": is_calibration,
+                        "fp8/calibration_progress": min(1.0, self.global_step / self.calibration_steps),
+                    })
+                    
+                    # Check for FP8 scale factors if available
+                    if hasattr(self.model, 'get_fp8_scales'):
+                        fp8_scales = self.model.get_fp8_scales()
+                        for name, scale in fp8_scales.items():
+                            log_dict[f"fp8/scale_{name}"] = scale
+                
+                # Batch and sequence statistics
+                log_dict.update({
+                    "batch/size": batch_size,
+                    "batch/seq_length": seq_len,
+                    "batch/total_tokens": batch_size * seq_len,
+                    "batch/gradient_accumulation": self.gradient_accumulation_steps,
+                    "batch/effective_batch_size": batch_size * self.gradient_accumulation_steps,
+                })
+                
+                # Training progress
+                if hasattr(self, 'num_training_steps'):
+                    log_dict["progress/percentage"] = (self.global_step / self.num_training_steps) * 100
+                
+                wandb.log(log_dict, step=self.global_step)
         except Exception as e:
-            pass  # Silently fail if WandB not available
+            # Only print error once every 1000 steps to avoid spam
+            if self.global_step % 1000 == 0:
+                print(f"WandB logging error at step {self.global_step}: {e}")
         
         # Add FP8-specific metrics
         if self.use_fp8:

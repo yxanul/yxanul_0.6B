@@ -54,18 +54,18 @@ def parse_args():
                        choices=['197M', '270M'], help='Model size preset')
     
     # Training configuration
-    parser.add_argument('--batch-size', type=int, default=1,
-                       help='Batch size per GPU (1 for 200k vocab to avoid OOM)')
-    parser.add_argument('--gradient-accumulation', type=int, default=32,
-                       help='Gradient accumulation steps (32 for effective batch size)')
-    parser.add_argument('--learning-rate', type=float, default=6e-4,
-                       help='Learning rate')
+    parser.add_argument('--batch-size', type=int, default=2,
+                       help='Batch size per GPU (2 is safe with gradient accumulation)')
+    parser.add_argument('--gradient-accumulation', type=int, default=16,
+                       help='Gradient accumulation steps (16 with batch=2 for effective 32)')
+    parser.add_argument('--learning-rate', type=float, default=2e-4,
+                       help='Learning rate (2e-4 is conservative for 270M)')
     parser.add_argument('--num-epochs', type=int, default=3,
                        help='Number of epochs')
     parser.add_argument('--max-steps', type=int, default=-1,
                        help='Maximum training steps')
-    parser.add_argument('--warmup-steps', type=int, default=1000,
-                       help='Warmup steps')
+    parser.add_argument('--warmup-steps', type=int, default=500,
+                       help='Warmup steps (short for faster stabilization)')
     
     # FP8 configuration
     parser.add_argument('--fp8-format', type=str, default='hybrid',
@@ -339,6 +339,12 @@ def main():
         print(f"Train samples: {len(train_dataset):,}")
         print(f"Val samples: {len(val_dataset):,}")
     
+    # Calculate total training steps for the dataset
+    tokens_per_step = args.batch_size * args.max_length * args.gradient_accumulation
+    total_dataset_tokens = 1_000_000_000  # 1B tokens in experimental-pretrain-1b
+    num_training_steps = total_dataset_tokens // tokens_per_step * args.num_epochs
+    print(f"Calculated training steps: {num_training_steps} for {args.num_epochs} epoch(s)")
+    
     # Create trainer with the same FP8 recipe
     print("\nInitializing TE v2.4 Trainer...")
     trainer = TEv2Trainer(
@@ -350,7 +356,10 @@ def main():
         local_rank=args.local_rank,
         gradient_accumulation_steps=args.gradient_accumulation,
         learning_rate=args.learning_rate,
-        batch_size=args.batch_size
+        batch_size=args.batch_size,
+        warmup_steps=args.warmup_steps,
+        num_training_steps=num_training_steps,
+        max_grad_norm=args.max_grad_norm
     )
     
     # Set dataloaders
