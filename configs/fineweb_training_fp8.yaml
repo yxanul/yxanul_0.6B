@@ -7,14 +7,16 @@ stage:
   description: "FP8 curriculum on FineWeb-Edu: 64→2048 tokens"
   
 data:
-  dataset_name: "Yxanul/fineweb-edu-highest-quality-2025"
+  dataset_name: "Yxanul/experimental-pretrain-1b"
+  dataset_path: "./experimental-pretrain-1b"
+  dataset_file: "dataset_1b.parquet"
   dataset_split: "train"
-  streaming: false  # Download for faster access
+  streaming: false  # Local file, no streaming
   
   max_sequence_length: 2048
   stride: 1024  # 50% overlap for better context
   
-  tokenizer: "gpt2"
+  tokenizer: "superbpe_t80k"  # Use SuperBPE tokenizer
   group_by_length: false
   
   # Specify text column explicitly

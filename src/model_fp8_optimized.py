@@ -502,11 +502,11 @@ def print_precision_summary(model: YxanulFP8Model):
 class ModelConfig:
     """Model configuration compatible with training scripts."""
     vocab_size: int = 200005
-    hidden_size: int = 768
-    intermediate_size: int = 2048
+    hidden_size: int = 640  # 270M model (was 768 for 350M)
+    intermediate_size: int = 1712  # ~2.67x hidden, divisible by 16
     num_hidden_layers: int = 28
-    num_attention_heads: int = 12
-    num_kv_heads: int = 2
+    num_attention_heads: int = 10  # 10 heads for 640 hidden
+    num_kv_heads: int = 2  # GQA with 5:1 ratio
     factorization_dim: int = 128
     max_position_embeddings: int = 4096
     rope_theta: float = 10000.0
@@ -552,11 +552,11 @@ if __name__ == "__main__":
     @dataclass
     class TestConfig:
         vocab_size: int = 200005  # SuperBPE
-        hidden_size: int = 768
-        intermediate_size: int = 2048
+        hidden_size: int = 640  # 270M model
+        intermediate_size: int = 1712
         num_hidden_layers: int = 28
-        num_attention_heads: int = 12
-        num_kv_heads: int = 2  # GQA with 6:1 ratio
+        num_attention_heads: int = 10
+        num_kv_heads: int = 2  # GQA with 5:1 ratio
         factorization_dim: int = 128
         max_position_embeddings: int = 4096
         rope_theta: float = 10000.0
