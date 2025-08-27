@@ -50,7 +50,7 @@ def parse_args():
     # Model configuration
     parser.add_argument('--config', type=str, default='configs/model_config.yaml',
                        help='Model configuration file')
-    parser.add_argument('--model-size', type=str, default='197M',
+    parser.add_argument('--model-size', type=str, default='270M',
                        choices=['197M', '270M'], help='Model size preset')
     
     # Training configuration
@@ -121,8 +121,26 @@ def parse_args():
 def load_config(args):
     """Load and merge configurations"""
     
+    # Always use 270M config when not in benchmark mode
+    if not args.benchmark and args.model_size == '270M':
+        # Force 270M configuration
+        config = ModelConfig(
+            vocab_size=200005,
+            hidden_size=640,  # Force correct 270M size
+            intermediate_size=1708,
+            num_hidden_layers=28,
+            num_attention_heads=10,
+            num_kv_heads=3,
+            head_dim=64,
+            max_position_embeddings=2048,  # Fixed seq length
+            use_fp8=not args.no_fp8,
+            use_factorized_embedding=True,
+            factorization_dim=128
+        )
+        print(f"Using 270M model config (hidden_size=640, layers=28)")
     # Load model config from curriculum yaml if using curriculum
-    if args.curriculum and os.path.exists(args.curriculum_config):
+    elif args.curriculum and os.path.exists(args.curriculum_config):
+        print(f"DEBUG: Loading curriculum config from {args.curriculum_config}")
         with open(args.curriculum_config, 'r') as f:
             curriculum_yaml = yaml.safe_load(f)
         if 'model' in curriculum_yaml:
@@ -136,7 +154,7 @@ def load_config(args):
                 num_attention_heads=model_cfg.get('num_attention_heads', 10),
                 num_kv_heads=model_cfg.get('num_kv_heads', 3),
                 head_dim=model_cfg.get('head_dim', 64),
-                max_position_embeddings=model_cfg.get('max_position_embeddings', 4096),
+                max_position_embeddings=model_cfg.get('max_position_embeddings', 2048),
                 use_fp8=model_cfg.get('use_fp8', not args.no_fp8),
                 use_factorized_embedding=model_cfg.get('use_factorized_embedding', True),
                 factorization_dim=model_cfg.get('factorization_dim', 128)

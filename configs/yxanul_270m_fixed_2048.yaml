@@ -1,0 +1,105 @@
+# Yxanul 270M Configuration - Fixed 2048 sequence length (no curriculum)
+# Simplified configuration for reliable training
+
+model:
+  name: "Yxanul-270M-TEv2"
+  vocab_size: 200005  # SuperBPE tokenizer
+  hidden_size: 640  # 270M model size
+  intermediate_size: 1708  # ~2.67x hidden for SwiGLU
+  num_hidden_layers: 28  # Reduced from 32 for better per-layer capacity
+  num_attention_heads: 10  # 10 heads * 64 dim = 640
+  num_kv_heads: 3  # GQA with ~3:1 ratio
+  head_dim: 64
+  max_position_embeddings: 2048  # Fixed sequence length
+  rope_theta: 10000.0
+  
+  # TE v2.4 specific
+  use_fp8: true
+  params_dtype: "bfloat16"
+  fuse_qkv_params: true
+  use_flash_attention: true
+  
+  # Factorized embeddings (Gemma-style)
+  use_factorized_embedding: true
+  factorization_dim: 128
+  
+  # Regularization
+  hidden_dropout: 0.0
+  attention_dropout: 0.0
+  
+  # Normalization
+  layernorm_epsilon: 1.0e-6
+  zero_centered_gamma: false
+
+training:
+  # Dataset configuration
+  dataset: "Yxanul/experimental-pretrain-1b"
+  dataset_path: "experimental-pretrain-1b"
+  dataset_file: "dataset_1b.parquet"
+  tokenizer: "superbpe_t80k"
+  
+  # Fixed training parameters for RTX 5090 (32GB)
+  batch_size: 4  # Conservative for 2048 seq_len with 200k vocab
+  gradient_accumulation_steps: 8  # Effective batch size of 32
+  learning_rate: 6.0e-4
+  num_epochs: 1
+  max_steps: -1
+  warmup_steps: 1000
+  max_grad_norm: 1.0
+  max_length: 2048  # Fixed sequence length - no curriculum
+  
+  # FP8 Configuration (TE v2.4)
+  fp8:
+    enabled: true
+    format: "hybrid"
+    calibration_steps: 64
+    amax_history_len: 16
+    amax_compute_algo: "max"
+    reduce_amax: true
+    fp8_dpa: false  # Disable for RTX 5090
+    fp8_mha: false
+  
+  # Scheduler
+  scheduler:
+    type: "cosine"
+    warmup_steps: 1000
+    min_lr_ratio: 0.1
+  
+  # Evaluation
+  eval_steps: 2000
+  save_steps: 10000
+  save_total_limit: 3
+  
+  # Checkpointing
+  checkpoint_dir: "checkpoints_te_v2"
+  save_best_model: true
+  metric_for_best_model: "val/perplexity"
+  
+  # Data loading
+  num_workers: 4
+
+# Performance expectations (simplified, no curriculum)
+performance:
+  rtx_5090:
+    tokens_per_sec: 70000
+    peak_memory_gb: 20.0
+    time_for_1_epoch_hours: 4.0
+    notes: "Fixed 2048 tokens, stable training"
+
+# Memory calculations
+memory_breakdown:
+  model_params: "275M * 2 bytes = 550MB"
+  optimizer_states: "275M * 8 bytes = 2.2GB (AdamW)"
+  fp8_overhead: "~500MB"
+  base_usage: "~3.3GB total"
+  
+  activation_memory_2048: "~1GB per sample"
+  safe_batch_size: "4 samples = ~4GB activations"
+  total_expected: "~8-10GB with batch_size=4"
+  headroom: "22-24GB available headroom"
+
+notes:
+  - "NO CURRICULUM - Fixed 2048 sequence length for simplicity"
+  - "Model creates exactly 275M parameters"
+  - "Conservative batch_size=4 for 200k vocab at 2048 tokens"
+  - "Single epoch on 1B token dataset"
