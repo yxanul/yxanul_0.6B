@@ -190,7 +190,8 @@ class YxanulTEv2Model(nn.Module):
                 zero_centered_gamma=config.zero_centered_gamma,
                 
                 # Memory optimization
-                fuse_wgrad_accumulation=True
+                # Set to False - True requires Megatron-style main_grad attribute
+                fuse_wgrad_accumulation=False
                 
                 # Note: attention_type removed - not valid in TE v2.4
                 # TE auto-selects best backend: Flash Attention 3, Fused, or Unfused
