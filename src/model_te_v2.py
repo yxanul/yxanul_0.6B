@@ -142,8 +142,10 @@ class YxanulTEv2Model(nn.Module):
         # Build transformer layers using TE v2.4 TransformerLayer
         self.layers = nn.ModuleList()
         
-        # Initialize RoPE (TE v2.4 way)
-        self.rope = RotaryPositionEmbedding(config.head_dim)
+        # Initialize RoPE (TE v2.4 way - following NVIDIA AMPLIFY approach)
+        # Create RoPE frequencies upfront for max sequence length
+        rope_generator = RotaryPositionEmbedding(config.head_dim, interleaved=True)
+        self.freqs_cis = rope_generator(config.max_position_embeddings)
         
         for layer_idx in range(config.num_hidden_layers):
             layer = te_pytorch.TransformerLayer(
@@ -284,11 +286,8 @@ class YxanulTEv2Model(nn.Module):
         # Token embeddings
         hidden_states = self.embed_tokens(input_ids)
         
-        # Generate RoPE frequencies for EXACT sequence length
-        # TE v2.4+ requires exact match - no caching/slicing allowed
-        freqs_cis = self.rope(seq_len)
-        if hidden_states.is_cuda:
-            freqs_cis = freqs_cis.to(hidden_states.device)
+        # Slice RoPE frequencies to current sequence length (NVIDIA AMPLIFY approach)
+        freqs_cis = self.freqs_cis[:seq_len].to(hidden_states.device, non_blocking=True)
         
         # Convert HuggingFace-style attention mask to TE format
         # HF: 1 = keep, 0 = mask out
