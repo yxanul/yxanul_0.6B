@@ -313,7 +313,10 @@ def main():
         fp8_format=args.fp8_format,
         fp8_recipe=fp8_recipe,  # Pass the same recipe
         calibration_steps=args.calibration_steps,
-        local_rank=args.local_rank
+        local_rank=args.local_rank,
+        gradient_accumulation_steps=args.gradient_accumulation,
+        learning_rate=args.learning_rate,
+        batch_size=args.batch_size
     )
     
     # Set dataloaders

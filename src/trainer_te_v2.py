@@ -54,6 +54,9 @@ class TEv2Trainer(EnhancedTrainer):
         fp8_format: str = "hybrid",  # "hybrid", "e4m3", or "mxfp8"
         fp8_recipe=None,  # Optionally pass pre-created recipe
         calibration_steps: int = 10,  # Steps to calibrate FP8 scaling
+        gradient_accumulation_steps: int = 1,
+        learning_rate: float = 6e-4,
+        batch_size: int = 1,
         **kwargs
     ):
         # Initialize base trainer
@@ -66,6 +69,9 @@ class TEv2Trainer(EnhancedTrainer):
         self.use_fp8 = use_fp8 and TE_AVAILABLE
         self.calibration_steps = calibration_steps
         self.fp8_format = fp8_format
+        self.gradient_accumulation_steps = gradient_accumulation_steps
+        self.learning_rate = learning_rate
+        self.batch_size = batch_size
         
         # MXFP8 is only available on Blackwell GPUs
         if fp8_format == "mxfp8":
