@@ -112,6 +112,7 @@ def create_dataloader(
     max_length: int = 2048,
     num_workers: int = 2,
     split: str = "train[:90%]",
+    pack_sequences: bool = False,  # Enable sequence packing for efficiency
     **kwargs  # Ignore extra arguments for compatibility
 ) -> tuple:
     """Create a DataLoader for LOCAL dataset only - NO STREAMING.
@@ -142,13 +143,28 @@ def create_dataloader(
     else:
         dataset_path = dataset_name  # Assume it's a path
     
-    print(f"Creating LOCAL dataset (NO STREAMING)")
-    dataset = LocalPretrainDataset(
-        dataset_path=dataset_path,
-        tokenizer=tokenizer,
-        max_length=max_length,
-        split_range=split_range
-    )
+    # Use packed sequences if enabled for better efficiency
+    if pack_sequences:
+        print(f"Creating PACKED dataset for efficient training")
+        # Import packed dataset module
+        from packed_dataset import PackedPretrainDatasetWithBoundaries
+        dataset = PackedPretrainDatasetWithBoundaries(
+            dataset_path=dataset_path,
+            tokenizer=tokenizer,
+            max_length=max_length,
+            split_range=split_range
+        )
+        # For IterableDataset, we need num_workers=0
+        actual_num_workers = 0
+    else:
+        print(f"Creating LOCAL dataset (NO STREAMING)")
+        dataset = LocalPretrainDataset(
+            dataset_path=dataset_path,
+            tokenizer=tokenizer,
+            max_length=max_length,
+            split_range=split_range
+        )
+        actual_num_workers = num_workers
     
     # Adjust batch size for FP8 (must be multiple of 8)
     if batch_size % 8 != 0 and batch_size > 1:
@@ -170,15 +186,16 @@ def create_dataloader(
         }
     
     # Create DataLoader
+    # Note: IterableDataset (packed) doesn't support shuffle
     dataloader = DataLoader(
         dataset,
         batch_size=batch_size,
-        shuffle=("train" in split),  # Shuffle for training
+        shuffle=("train" in split and not pack_sequences),  # Can't shuffle IterableDataset
         collate_fn=collate_fn,
-        num_workers=num_workers,
+        num_workers=actual_num_workers,
         pin_memory=True,
         drop_last=True,  # Drop incomplete batches
-        persistent_workers=(num_workers > 0)
+        persistent_workers=(actual_num_workers > 0)
     )
     
     return dataloader, dataset

@@ -476,7 +476,7 @@ def main():
                 if val_dataloader is not None and global_step % eval_steps == 0:
                     if rank == 0:
                         print(f"\n  Running validation at step {global_step}...")
-                    val_ppl = trainer.validate(val_dataloader, max_batches=50)
+                    val_ppl = trainer.validate(val_dataloader, max_batches=500)
                     if rank == 0 and val_ppl:
                         print(f"  Validation perplexity: {val_ppl:.2f}")
                     model.train()
@@ -488,7 +488,7 @@ def main():
                         print(f"\n  Running multi-domain validation at step {global_step}...")
                         print("  This measures perplexity across English, Math, and Code domains")
                     try:
-                        multi_domain_results = trainer.validate_multi_domain(max_batches=50)
+                        multi_domain_results = trainer.validate_multi_domain(max_batches=100)
                         if rank == 0 and multi_domain_results:
                             print("  Multi-domain validation complete - check logs for detailed metrics")
                     except Exception as e:

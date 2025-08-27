@@ -255,9 +255,15 @@ class EnhancedTrainer(OptimizedTrainer):
         else:
             tokens_processed = actual_tokens
             
-        # Also don't count gradient accumulation steps multiple times
-        # tokens_per_second should be actual tokens processed per wall-clock second
-        tokens_per_second = tokens_processed / step_time if step_time > 0 else 0
+        # Get gradient accumulation steps from config (default to 1 if not set)
+        grad_accum_steps = 1
+        if hasattr(self, 'config') and self.config:
+            grad_accum_steps = self.config.get('training', {}).get('gradient_accumulation_steps', 1)
+        
+        # Calculate effective tokens per second INCLUDING gradient accumulation
+        # This represents the actual training throughput
+        effective_tokens = tokens_processed * grad_accum_steps
+        tokens_per_second = effective_tokens / step_time if step_time > 0 else 0
         
         # Memory after step (GPU only)
         mem_after = 0
