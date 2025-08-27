@@ -2,7 +2,7 @@
 
 A revolutionary 197M parameter language model achieving **15x faster training** than baseline through cutting-edge optimizations inspired by DeepSeek V3, Microsoft DeepSpeed, and the latest research.
 
-> **🚀 New: TransformerEngine v2.4 Implementation** - Achieves 40-50% additional speedup with native modules and proper FP8 context management. See [TE v2.4 Migration](#te-v24-migration) for details.
+> **⚡ FP8 Training Now Working** - Fixed critical next-token prediction bug. Model now trains correctly with realistic loss values.
 
 ## 🚀 Key Innovations
 
@@ -12,13 +12,12 @@ A revolutionary 197M parameter language model achieving **15x faster training** 
 - 4.1B tokens → 2.61B actual tokens processed
 - Enables meaningful ultra-short sequences (8 tokens = complete phrase!)
 
-### 2. **DeepSeek-Inspired FP8 Mixed Precision** (1.8x Speedup)
-- **TransformerEngine v2.4**: Native FP8 with proper context management
-- **Critical Fix**: Backward pass now correctly outside fp8_autocast
-- **60% FP8 (E4M3)**: Matrix multiplies, FFN, attention
-- **40% BF16**: Embeddings, LayerNorms, sensitive ops
+### 2. **DeepSeek-Inspired FP8 Mixed Precision** (2x Speedup Target)
+- **60% FP8 (E4M3)**: Matrix multiplies, FFN, attention projections
+- **40% BF16**: Embeddings, LayerNorms, output head
 - **<1% FP32**: Optimizer states, loss computation
 - Based on DeepSeek V3.1's proven strategy at 671B scale
+- Transformer Engine handles FP8 conversion automatically
 
 ### 3. **Ultra-Aggressive Curriculum Learning** (3x Faster Convergence)
 - **10 stages**: Starting from seq_len=8 (like Microsoft DeepSpeed)
@@ -27,68 +26,63 @@ A revolutionary 197M parameter language model achieving **15x faster training** 
 - Natural progression: phrases → sentences → paragraphs → documents
 
 ### 4. **Advanced Architecture**
-- **Native TransformerLayer** (TE v2.4): Replaces custom implementations
 - **Factorized Embeddings** (r=128): Saves 127.9M parameters
-- **RoPE**: Better length generalization
-- **SwiGLU**: Native support in TE v2.4
-- **GQA (6:1)**: Native support with proper KV head handling
-- **RMSNorm**: Native TE implementation
-- **Flash Attention 3**: Auto-selected on NGC 25.05+
+- **RoPE**: Better length generalization for long sequences
+- **SwiGLU Activation**: Better than ReLU/GELU for language modeling
+- **GQA (5:1)**: 10 attention heads, 2 KV heads for efficiency
+- **RMSNorm**: More stable than LayerNorm
+- **Flash Attention**: Via PyTorch's scaled_dot_product_attention
 
 ## 📊 Performance Metrics
 
-| Metric | Baseline (GPT-2) | Yxanul (Original) | Yxanul (TE v2.4) | Best Improvement |
-|--------|------------------|-------------------|------------------|------------------|
-| **Training Time (3 epochs)** | 90 hours | 6 hours | 4 hours | **22.5x faster** |
-| **Tokens/Second (RTX 4090)** | 5,000 | 17,000¹ | 85,000 | **17x** |
-| **Tokens Processed** | 4.1B | 2.61B | 2.61B | **37.5% fewer** |
-| **Memory Usage** | 2.25 GB | 1.75 GB | 1.5 GB | **33% less** |
-| **Time to PPL<50** | 30 hours | 2 hours | 1.5 hours | **20x faster** |
+| Metric | Baseline (GPT-2) | Yxanul FP8 | Improvement |
+|--------|------------------|------------|-------------|
+| **Model Size** | 197M params | 270M params | Larger but more capable |
+| **Training Dataset** | Various | 1B tokens (experimental-pretrain-1b) | High quality |
+| **Tokens/Second (RTX 5090)** | ~5,000 | ~3,000¹ | See note |
+| **Memory Usage** | ~3 GB | ~28 GB² | Large vocab overhead |
+| **Starting Loss** | ~11 | ~12.3 | Proper next-token prediction |
+| **Loss at 1400 steps** | N/A | ~9.7 | Healthy convergence |
 
-¹ *Original FP8 implementation had issues - actual throughput was ~17k, not 60k as expected*
+¹ *With batch_size=8, seq_len=128, grad_accum=32 - effective batch of 32k tokens*
+² *200k vocabulary requires significant memory - use batch_size=1 for training*
 
 ## 🏗️ Architecture Details
 
 ```yaml
-Model Configuration:
-  Parameters: 197M total
+Model Configuration (270M):
+  Parameters: 270M total
   Vocabulary: 200,005 (SuperBPE-t80k)
-  Hidden Size: 768
-  Layers: 28 (deep & narrow)
-  Attention Heads: 12 (with 2 KV heads - GQA)
-  FFN Size: 2,048 (optimized for SwiGLU)
-  Context Length: 4,096 tokens
+  Hidden Size: 640
+  Layers: 28 (deep architecture)
+  Attention Heads: 10 (with 2 KV heads - 5:1 GQA)
+  FFN Size: 1,712 (2.67x hidden, divisible by 16)
+  Context Length: 2,048 tokens (training)
+  Max Position: 4,096 tokens (RoPE supports extrapolation)
   
 Precision Strategy (DeepSeek-style):
   FP8 (E4M3): ~60% of compute operations
-  BF16: ~40% (embeddings, norms, output)
-  FP32: <1% (optimizer, loss, scales)
+  BF16: ~40% (embeddings, norms, output head)
+  FP32: <1% (optimizer states, loss computation)
 ```
 
-## TE v2.4 Migration
+## 🎯 Training Configuration
 
-We've migrated to TransformerEngine v2.4 for significant performance improvements:
+### Dataset
+- **Training**: 605,406 examples (95% of dataset)
+- **Validation**: 31,864 examples (5% of dataset)
+- **Total tokens**: 1 billion (experimental-pretrain-1b)
+- **Format**: Single parquet file with 'text' column
 
-### Key Improvements
-- **40-50% faster** than original FP8 implementation
-- **Native modules**: TransformerLayer with built-in GQA, RMSNorm, SwiGLU
-- **Proper FP8 context**: Backward pass correctly outside fp8_autocast
-- **Flash Attention 3**: Automatically selected on H100/A100
+### Critical Fix Applied
+- **Bug**: Model was predicting current token (copy task)
+- **Fix**: Now properly predicts next token with shifted loss
+- **Result**: Realistic training dynamics (Loss 12→9 over 1400 steps)
 
-### New Files
-- `src/model_te_v2.py` - TE v2.4 model with native TransformerLayer
-- `src/trainer_te_v2.py` - Proper fp8_autocast context management
-- `train_te_v2.py` - Complete training script with benchmarking
-- `configs/te_v2_config.yaml` - Optimized configuration
-
-### Usage
-```bash
-# Train with TE v2.4 (recommended)
-python train_te_v2.py --config configs/te_v2_config.yaml
-
-# Benchmark performance
-python train_te_v2.py --benchmark --batch-size 32
-```
+### Memory Considerations
+- **200k vocabulary** requires ~28GB VRAM on RTX 5090
+- Use `batch_size=1` with `gradient_accumulation=32`
+- Validation must use `batch_size=1` to avoid OOM
 
 ## 🔥 Quick Start
 
@@ -101,60 +95,63 @@ cp .env.example .env
 export $(cat .env | xargs)
 ```
 
-### Using NVIDIA NGC Container (Recommended)
+### Installation
 
 ```bash
-# 2. Launch NVIDIA container with TransformerEngine v2.4+
-# Use NGC 25.05+ for TE v2.3+ and Flash Attention 3
-docker run --gpus all -it --rm \
-  -v $(pwd):/workspace \
-  -e HF_TOKEN=$HF_TOKEN \
-  nvcr.io/nvidia/pytorch:25.05-py3
-
-# 2. Clone repository
-git clone https://github.com/yourusername/yxanul_0.6B.git
+# 1. Clone repository
+git clone https://github.com/yxanul/yxanul_0.6B.git
 cd yxanul_0.6B
 
-# 3. Install additional requirements
-pip install transformers datasets accelerate wandb
+# 2. Install requirements (including TransformerEngine for FP8)
+pip install -r requirements.txt
 
-# 4. Start training with FP8 + Ultra Curriculum
-python train_fp8.py --config configs/fineweb_training_ultra_curriculum.yaml
+# 3. Download dataset (1B tokens)
+# Place experimental-pretrain-1b/dataset_1b.parquet in project root
+
+# 4. Start training with FP8 curriculum
+python train_fp8.py --config configs/fineweb_training_fp8.yaml
+
+# Or train without FP8 (BF16 only)
+python train_fp8.py --config configs/fineweb_training_fp8.yaml --disable-fp8
 ```
 
-### Training Configurations
+### Training Commands
 
-#### Research Mode (Maximum Speed)
 ```bash
-# NEW: TransformerEngine v2.4 (Recommended)
-python train_te_v2.py --config configs/te_v2_config.yaml
-# Expected: 85k tokens/sec on RTX 4090
+# Train with FP8 optimization (recommended)
+python train_fp8.py --config configs/fineweb_training_fp8.yaml
 
-# Original: SuperBPE-t80k + FP8 + Ultra Curriculum
-python train_fp8.py --config configs/fineweb_training_ultra_curriculum.yaml
-# Actual: 17k tokens/sec on RTX 4090 (implementation issues)
+# Train with BF16 only (if FP8 not available)
+python train_fp8.py --config configs/fineweb_training_fp8.yaml --disable-fp8
+
+# Evaluation only
+python train_fp8.py --config configs/fineweb_training_fp8.yaml --eval-only
+
+# Resume from checkpoint
+python train_fp8.py --config configs/fineweb_training_fp8.yaml --checkpoint checkpoints/latest.pt
 ```
 
-#### Production Mode (Best Quality)
-```bash
-# Switch to SuperBPE-t180k for +0.4% quality
-# Edit src/data_pipeline.py: change t80k to t180k
-python train_fp8.py --config configs/fineweb_training_ultra_curriculum.yaml
+### Expected Training Metrics (RTX 5090)
+
+```
+Step 100:  Loss=12.26, PPL=210,732  # Starting from random init
+Step 500:  Loss=10.02, PPL=22,444   # Rapid initial learning
+Step 1000: Loss=9.75,  PPL=17,180   # Converging nicely
+Step 1400: Loss=9.69,  PPL=16,152   # Steady improvement
 ```
 
 ## 📈 Training Progression
 
-### Ultra-Curriculum Stages (Revolutionary!)
+### Curriculum Stages (Memory-Optimized for 32GB VRAM)
 
-| Stage | Seq Length | Tokens | Batch Size | What's Learned |
-|-------|------------|--------|------------|----------------|
-| 1 | 8 | ~57 chars | 8,192 | Word patterns, phrases |
-| 2 | 16 | ~115 chars | 8,192 | Complete sentences |
-| 3 | 32 | ~230 chars | 4,096 | Paragraph structure |
-| 4 | 64 | ~460 chars | 2,048 | Multi-sentence coherence |
-| 5 | 128 | ~920 chars | 1,024 | Extended arguments |
-| 6 | 256 | ~1,840 chars | 512 | Section organization |
-| 7 | 512 | ~3,680 chars | 256 | Document structure |
+| Stage | Steps | Seq Length | Batch Size | Effective Batch | Purpose |
+|-------|-------|------------|------------|-----------------|----------|
+| 1 | 0-3k | 128 | 8 | 256 (w/ grad_accum=32) | Basic patterns |
+| 2 | 3k-6k | 256 | 4 | 128 | Sentence structure |
+| 3 | 6k-10k | 512 | 2 | 64 | Paragraph coherence |
+| 4 | 10k-15k | 768 | 2 | 64 | Extended context |
+| 5 | 15k-25k | 1024 | 1 | 32 | Document structure |
+| 6 | 25k+ | 2048 | 1 | 32 | Full context |
 | 8 | 768 | ~5,520 chars | 256 | Complex reasoning |
 | 9 | 1,536 | ~11k chars | 128 | Long-range dependencies |
 | 10 | 2,048 | ~14.7k chars | 64 | Complete mastery |
