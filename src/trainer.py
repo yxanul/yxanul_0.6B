@@ -234,8 +234,13 @@ class OptimizedTrainer:
         
         # Enable gradient checkpointing if configured
         if opt_config.get("memory", {}).get("gradient_checkpointing", {}).get("enabled", False):
-            print("Enabling gradient checkpointing...")
-            self.model.gradient_checkpointing_enable()
+            # Check if model has gradient checkpointing method (HuggingFace style)
+            if hasattr(self.model, 'gradient_checkpointing_enable'):
+                print("Enabling gradient checkpointing...")
+                self.model.gradient_checkpointing_enable()
+            else:
+                # For TE models, gradient checkpointing is handled differently
+                print("Skipping gradient checkpointing (TE models handle this internally)")
             
     def _setup_optimizer(self):
         """Setup optimizer with all optimizations."""
