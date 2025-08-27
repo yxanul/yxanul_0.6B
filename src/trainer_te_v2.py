@@ -72,6 +72,27 @@ class TEv2Trainer(EnhancedTrainer):
         self.gradient_accumulation_steps = gradient_accumulation_steps
         self.learning_rate = learning_rate
         self.batch_size = batch_size
+        self.max_grad_norm = kwargs.get('max_grad_norm', 1.0)  # Default gradient clipping
+        self.global_step = 0  # Initialize global step counter
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        
+        # Move model to device
+        self.model = self.model.to(self.device)
+        
+        # Initialize optimizer
+        self.optimizer = torch.optim.AdamW(
+            self.model.parameters(),
+            lr=self.learning_rate,
+            betas=(0.9, 0.95),
+            weight_decay=0.1
+        )
+        
+        # Initialize scheduler (cosine with warmup)
+        self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            self.optimizer,
+            T_max=kwargs.get('num_training_steps', 10000),
+            eta_min=self.learning_rate * 0.1
+        )
         
         # MXFP8 is only available on Blackwell GPUs
         if fp8_format == "mxfp8":
@@ -229,10 +250,10 @@ class TEv2Trainer(EnhancedTrainer):
         tokens_per_sec = (batch_size * seq_len) / step_time
         
         metrics = {
-            "loss": loss.item() * self.gradient_accumulation_steps,
+            "loss": (loss.detach().item() if loss.requires_grad else loss.item()) * self.gradient_accumulation_steps,
             "perplexity": perplexity,
             "accuracy": accuracy,
-            "learning_rate": self.scheduler.get_last_lr()[0],
+            "learning_rate": self.optimizer.param_groups[0]['lr'],
             "tokens_per_second": tokens_per_sec,
             "step_time": step_time,
             "global_step": self.global_step,
