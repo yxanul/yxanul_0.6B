@@ -167,7 +167,7 @@ class YxanulTEv2Model(nn.Module):
                 layer_number=layer_idx + 1,
                 
                 # Attention settings
-                self_attn_mask_type='causal',
+                self_attn_mask_type='padding_causal',  # Support both padding and causal masking
                 attention_dropout=config.attention_dropout,
                 hidden_dropout=config.hidden_dropout,
                 

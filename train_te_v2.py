@@ -268,8 +268,7 @@ def main():
             tokenizer=tokenizer,
             batch_size=stage_config['batch_size'],
             current_stage=current_stage,
-            num_workers=0,  # Streaming works best with 0 workers
-            split="train"
+            num_workers=args.num_workers  # Use configured workers
         )
         
         # For validation, use last 5% of local dataset
@@ -435,8 +434,7 @@ def main():
                         tokenizer=tokenizer,
                         batch_size=new_stage['batch_size'],
                         current_stage=current_stage_idx,
-                        num_workers=0,
-                        split="train"
+                        num_workers=args.num_workers
                     )
                     
                     # Update validation dataloader sequence length

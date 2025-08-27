@@ -47,10 +47,28 @@ The data pipeline (`src/data_pipeline.py`) implements SuperBPE tokenization vari
 
 ## Common Development Commands
 
+### Environment Variables for TransformerEngine
+
+Set these before training for optimal performance:
+
+```bash
+# Enable Flash Attention for best performance
+export NVTE_FLASH_ATTN=1
+
+# Disable fused attention (can cause issues with padding)
+export NVTE_FUSED_ATTN=0
+
+# Optional: Allow non-deterministic algorithms for better performance
+# Only enable if reproducibility is not critical
+# export NVTE_ALLOW_NONDETERMINISTIC_ALGO=1
+```
+
 ### Training Commands
 
 ```bash
 # NEW: TransformerEngine v2.4 - Maximum performance (40-50% faster)
+# First set environment variables (see above)
+export NVTE_FLASH_ATTN=1 NVTE_FUSED_ATTN=0
 python train_te_v2.py --config configs/te_v2_config.yaml
 
 # Benchmark TE v2.4 performance
@@ -222,6 +240,12 @@ On RTX 4090:
 4. **FP8 implementation**: Migrated to TE v2.4 for proper FP8 operations
 5. **Validation bias**: Added multi-domain validation instead of using training tail
 6. **Checkpoint bloat**: Implemented automatic rotation with CheckpointManager
+7. **Checkpoint saving error**: Fixed DelayedScaling recipe serialization (no 'format' attribute)
+8. **Validation OOM with 200k vocab**: Limited batch_size to 2 for large vocabularies
+9. **Double split argument**: Fixed curriculum dataloader passing split twice
+10. **Attention mask ignored**: Changed from 'causal' to 'padding_causal' mask type
+11. **Training instability**: Fixed factorized embedding init (0.02 vs 0.125) and added warmup
+12. **FP8 calibration**: Increased from 10 to 64 steps for stability
 
 ## Architecture Comparison
 
