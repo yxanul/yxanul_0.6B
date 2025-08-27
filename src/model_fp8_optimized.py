@@ -255,30 +255,15 @@ class FP8Attention(nn.Module):
         # Use scaled_dot_product_attention for better performance and stability
         # This handles numerical stability and can use Flash Attention
         
-        # Only use CUDA-specific context on CUDA devices
-        if hidden_states.is_cuda:
-            with torch.backends.cuda.sdp_kernel(
-                enable_flash=True,  # Use Flash Attention if available
-                enable_math=True,   # Fallback to math implementation
-                enable_mem_efficient=True  # Use memory-efficient attention
-            ):
-                # SDPA handles scaling and softmax in a fused kernel
-                attn_output = F.scaled_dot_product_attention(
-                    q, k, v,
-                    attn_mask=sdpa_mask,  # Combined causal + padding mask if provided
-                    dropout_p=0.0,
-                    is_causal=False if sdpa_mask is not None else True,  # Use explicit mask if available
-                    scale=1.0 / math.sqrt(self.head_dim)
-                )
-        else:
-            # CPU or other devices - SDPA will use appropriate implementation
-            attn_output = F.scaled_dot_product_attention(
-                q, k, v,
-                attn_mask=sdpa_mask,
-                dropout_p=0.0,
-                is_causal=False if sdpa_mask is not None else True,
-                scale=1.0 / math.sqrt(self.head_dim)
-            )
+        # SDPA will automatically choose the best backend (Flash, Math, or Mem-Efficient)
+        # No need for context manager - just call it directly
+        attn_output = F.scaled_dot_product_attention(
+            q, k, v,
+            attn_mask=sdpa_mask,  # Combined causal + padding mask if provided
+            dropout_p=0.0,
+            is_causal=False if sdpa_mask is not None else True,  # Use explicit mask if available
+            scale=1.0 / math.sqrt(self.head_dim)
+        )
         
         # Reshape and project output (FP8 if available)
         attn_output = attn_output.transpose(1, 2).contiguous().view(batch_size, seq_len, self.hidden_size)

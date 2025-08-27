@@ -154,12 +154,17 @@ def main():
     # Convert to dict for compatibility
     model_config = {'model': asdict(model_config_obj)}
     
-    # Load optimization config (this is fine to keep)
+    # Load optimization config but disable torch.compile for FP8 models
     if Path(args.optimization_config).exists():
         with open(args.optimization_config, 'r') as f:
             optimization_config = yaml.safe_load(f)
     else:
         optimization_config = {}
+    
+    # DISABLE torch.compile - it's incompatible with our FP8 model
+    if 'torch_compile' in optimization_config:
+        optimization_config['torch_compile']['enabled'] = False
+        print("NOTE: Disabled torch.compile (incompatible with FP8 model)")
     
     # Combine configs
     full_config = {
