@@ -338,11 +338,12 @@ def create_te_v2_model(config: ModelConfig, fp8_recipe=None) -> YxanulTEv2Model:
     """
     Create and initialize a Yxanul TE v2.4 model.
     
-    Uses fp8_model_init function for proper FP8 initialization.
+    TransformerEngine layers handle FP8 initialization internally,
+    so we don't need to call fp8_model_init().
     
     Args:
         config: Model configuration
-        fp8_recipe: FP8 recipe to use (must match training recipe)
+        fp8_recipe: FP8 recipe to use (for reference, not used here)
     """
     if not TE_AVAILABLE:
         raise RuntimeError("TransformerEngine is required. Please use NGC container.")
@@ -350,26 +351,15 @@ def create_te_v2_model(config: ModelConfig, fp8_recipe=None) -> YxanulTEv2Model:
     # Create the model
     model = YxanulTEv2Model(config)
     
-    # Initialize for FP8 if enabled
-    if config.use_fp8:
-        # Default to HYBRID format for H100/RTX 4090 compatibility
-        if fp8_recipe is None:
-            from transformer_engine.common.recipe import DelayedScaling, Format
-            fp8_recipe = DelayedScaling(
-                fp8_format=Format.HYBRID,  # E4M3 forward, E5M2 backward
-                amax_history_len=16,
-                amax_compute_algo="max",
-                reduce_amax=True,
-                fp8_dpa=True  # FP8 attention if supported
-            )
-        
-        # Initialize model for FP8 (modifies model in-place)
-        te_pytorch.fp8_model_init(model, fp8_recipe)
-    
     # Move to GPU if available
     if torch.cuda.is_available():
         model = model.cuda()
         print(f"Model moved to GPU: {torch.cuda.get_device_name()}")
+    
+    # TransformerEngine layers handle FP8 internally via fp8_autocast
+    # No need for fp8_model_init() as shown in official examples
+    if config.use_fp8:
+        print(f"Model configured for FP8 training (will use fp8_autocast during forward)")
     
     return model
 
@@ -380,19 +370,8 @@ if __name__ == "__main__":
     # Create config
     config = ModelConfig()
     
-    # Create FP8 recipe for consistency if FP8 is enabled
-    fp8_recipe = None
-    if config.use_fp8:
-        from transformer_engine.common.recipe import DelayedScaling, Format
-        fp8_recipe = DelayedScaling(
-            fp8_format=Format.HYBRID,
-            amax_history_len=16,
-            amax_compute_algo="max",
-            reduce_amax=True
-        )
-    
-    # Create model (will apply FP8 initialization if enabled)
-    model = create_te_v2_model(config, fp8_recipe=fp8_recipe)
+    # Create model (TransformerEngine layers handle FP8 internally)
+    model = create_te_v2_model(config)
     
     # Test forward pass
     batch_size = 4
