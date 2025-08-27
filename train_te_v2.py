@@ -17,9 +17,8 @@ import argparse
 from pathlib import Path
 from dataclasses import asdict
 
-# Disable WandB service before importing torch
-os.environ["WANDB_DISABLE_SERVICE"] = "true"
-os.environ["WANDB_REQUIRE_SERVICE"] = "false"
+# Enable WandB for tracking training progress
+# WandB will log metrics, loss curves, and model performance
 
 import torch
 import yaml
@@ -90,8 +89,8 @@ def parse_args():
                        help='Maximum checkpoints to keep')
     
     # Data
-    parser.add_argument('--dataset', type=str, default='fineweb-edu-highest-quality-2025',
-                       help='Dataset name')
+    parser.add_argument('--dataset', type=str, default='Yxanul/experimental-pretrain-1b',
+                       help='Dataset name or local path')
     parser.add_argument('--max-length', type=int, default=2048,
                        help='Maximum sequence length')
     parser.add_argument('--num-workers', type=int, default=4,
@@ -253,7 +252,7 @@ def main():
         print(f"\nCurriculum Training Enabled:")
         print(f"  Target tokens: {args.target_tokens:,}")
         print(f"  Number of stages: {len(curriculum_config['training']['curriculum_stages'])}")
-        print(f"  Streaming from HuggingFace: Yes")
+        print(f"  Using LOCAL dataset: {args.dataset}")
         
         # Start with first stage
         current_stage = 0

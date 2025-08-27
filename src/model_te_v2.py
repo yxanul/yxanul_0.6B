@@ -124,6 +124,7 @@ class YxanulTEv2Model(nn.Module):
     def __init__(self, config: ModelConfig):
         super().__init__()
         self.config = config
+        self.gradient_checkpointing = False  # Can be enabled to save memory
         
         if not TE_AVAILABLE:
             raise RuntimeError("TransformerEngine is required for this model. Install from NGC container.")
@@ -300,11 +301,22 @@ class YxanulTEv2Model(nn.Module):
         # Pass through transformer layers
         # TE handles causal masking internally when self_attn_mask_type='causal'
         for layer in self.layers:
-            hidden_states = layer(
-                hidden_states,
-                attention_mask=te_attention_mask,
-                rotary_pos_emb=freqs_cis  # Pass RoPE frequencies (TE v2.4 API)
-            )
+            if self.gradient_checkpointing and self.training:
+                # Use gradient checkpointing to save memory
+                import torch.utils.checkpoint
+                hidden_states = torch.utils.checkpoint.checkpoint(
+                    layer,
+                    hidden_states,
+                    te_attention_mask,
+                    freqs_cis,
+                    use_reentrant=False
+                )
+            else:
+                hidden_states = layer(
+                    hidden_states,
+                    attention_mask=te_attention_mask,
+                    rotary_pos_emb=freqs_cis  # Pass RoPE frequencies (TE v2.4 API)
+                )
         
         # Final normalization
         hidden_states = self.final_norm(hidden_states)
@@ -335,7 +347,7 @@ class YxanulTEv2Model(nn.Module):
         return (loss, logits) if loss is not None else logits
 
 
-def create_te_v2_model(config: ModelConfig, fp8_recipe=None) -> YxanulTEv2Model:
+def create_te_v2_model(config: ModelConfig, fp8_recipe=None, enable_gradient_checkpointing=True) -> YxanulTEv2Model:
     """
     Create and initialize a Yxanul TE v2.4 model.
     
@@ -345,12 +357,18 @@ def create_te_v2_model(config: ModelConfig, fp8_recipe=None) -> YxanulTEv2Model:
     Args:
         config: Model configuration
         fp8_recipe: FP8 recipe to use (for reference, not used here)
+        enable_gradient_checkpointing: Enable gradient checkpointing to save memory
     """
     if not TE_AVAILABLE:
         raise RuntimeError("TransformerEngine is required. Please use NGC container.")
     
     # Create the model
     model = YxanulTEv2Model(config)
+    
+    # Enable gradient checkpointing to save memory
+    if enable_gradient_checkpointing:
+        model.gradient_checkpointing = True
+        print("✓ Gradient checkpointing ENABLED - trading compute for memory")
     
     # Move to GPU if available
     if torch.cuda.is_available():
