@@ -5,11 +5,11 @@ Optimized for experimental-pretrain-1b dataset
 """
 
 import torch
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader, Dataset, IterableDataset
 from datasets import load_dataset
 from transformers import AutoTokenizer
 import numpy as np
-from typing import Dict, Optional
+from typing import Dict, Optional, Iterator
 from pathlib import Path
 import os
 
@@ -222,12 +222,86 @@ def create_tokenizer(model_name: str = None, use_superbpe: bool = True):
     return tokenizer
 
 
+def calculate_training_steps(
+    dataset_size: int,
+    batch_size: int,
+    num_epochs: int,
+    gradient_accumulation_steps: int = 1,
+    world_size: int = 1
+) -> int:
+    """Calculate total training steps."""
+    effective_batch_size = batch_size * gradient_accumulation_steps * world_size
+    steps_per_epoch = dataset_size // effective_batch_size
+    total_steps = steps_per_epoch * num_epochs
+    return total_steps
+
+
+def estimate_dataset_size(dataset_name: str, split: str = "train") -> int:
+    """Estimate the number of examples in a dataset."""
+    # For experimental-pretrain-1b, we know the size
+    if "experimental-pretrain" in dataset_name.lower():
+        return 605_376  # Actual size of the dataset
+    
+    # Try to load and check
+    try:
+        if "yxanul" in dataset_name.lower():
+            dataset_path = "./experimental-pretrain-1b/dataset_1b.parquet"
+            dataset = load_dataset("parquet", data_files=dataset_path, split="train")
+            return len(dataset)
+    except:
+        pass
+    
+    # Default estimate
+    return 100_000
+
+
 # For backward compatibility with imports
 def create_curriculum_dataloader(*args, **kwargs):
     """Curriculum loading not supported in simple version."""
     print("WARNING: Curriculum loading called but using simple dataloader")
     return create_dataloader(**kwargs)
 
+
+class MixedDataset(Dataset):
+    """Compatibility stub for mixed datasets."""
+    def __init__(self, *args, **kwargs):
+        raise NotImplementedError("MixedDataset not supported in simple version")
+
+
+class CurriculumStreamingDataset(Dataset):
+    """Compatibility stub for curriculum datasets."""
+    def __init__(self, *args, **kwargs):
+        raise NotImplementedError("Curriculum streaming not supported - use local data only")
+
+
+class DataCollator:
+    """Simple data collator for batching."""
+    def __init__(self, pad_token_id: int):
+        self.pad_token_id = pad_token_id
+    
+    def __call__(self, features: list) -> Dict[str, torch.Tensor]:
+        batch = {}
+        for key in features[0].keys():
+            if key == "labels":
+                batch[key] = torch.stack([f[key] for f in features])
+            else:
+                batch[key] = torch.stack([f[key] for f in features])
+        return batch
+
+
+def fp8_collate_fn(batch):
+    """Simple collate function for FP8."""
+    input_ids = torch.stack([item['input_ids'] for item in batch])
+    labels = torch.stack([item['labels'] for item in batch])
+    attention_mask = torch.stack([item['attention_mask'] for item in batch])
+    return {
+        'input_ids': input_ids,
+        'labels': labels,
+        'attention_mask': attention_mask
+    }
+
+
 # Compatibility exports
 PretrainDataset = LocalPretrainDataset
 StreamingDataset = LocalPretrainDataset  # No streaming!
+IterableDataset = Dataset  # No streaming!
