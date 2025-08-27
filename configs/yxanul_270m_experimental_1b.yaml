@@ -89,8 +89,8 @@ training:
       name: "Token Level"
       seq_len: 16
       tokens: 20_000_000  # 2% of data
-      batch_size: 256  # Very large batch for tiny sequences
-      gradient_accumulation_steps: 1
+      batch_size: 64  # Reduced for 200k vocab
+      gradient_accumulation_steps: 4
       dataset_mix:
         fineweb: 0.70  # Already mixed in dataset
         math: 0.15
@@ -101,8 +101,8 @@ training:
       name: "Phrase Level"
       seq_len: 32
       tokens: 30_000_000  # 3% of data
-      batch_size: 128  # Safe: ~0.5GB VRAM
-      gradient_accumulation_steps: 1
+      batch_size: 32  # Reduced for 200k vocab
+      gradient_accumulation_steps: 8
       dataset_mix:
         fineweb: 0.70
         math: 0.15
@@ -113,8 +113,8 @@ training:
       name: "Short Sentences"
       seq_len: 64
       tokens: 40_000_000  # 4% of data
-      batch_size: 64  # Safe: ~0.5GB VRAM
-      gradient_accumulation_steps: 2  # Effective batch 128
+      batch_size: 16  # Reduced for 200k vocab
+      gradient_accumulation_steps: 8  # Effective batch 128
       dataset_mix:
         fineweb: 0.70
         math: 0.15
@@ -125,8 +125,8 @@ training:
       name: "Full Sentences"
       seq_len: 128
       tokens: 60_000_000  # 6% of data
-      batch_size: 32  # Safe: ~0.5GB VRAM usage
-      gradient_accumulation_steps: 4  # Effective batch 128
+      batch_size: 8  # Reduced for 200k vocab
+      gradient_accumulation_steps: 16  # Effective batch 128
       dataset_mix:
         fineweb: 0.70  # Already mixed in dataset
         math: 0.15
@@ -137,8 +137,8 @@ training:
       name: "Paragraph Understanding"
       seq_len: 256
       tokens: 80_000_000  # 8% of data
-      batch_size: 32  # Safe: ~2GB VRAM
-      gradient_accumulation_steps: 2  # Effective batch 64
+      batch_size: 4  # Reduced for 200k vocab
+      gradient_accumulation_steps: 16  # Effective batch 64
       dataset_mix:
         fineweb: 0.70
         math: 0.15
