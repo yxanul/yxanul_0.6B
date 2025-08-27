@@ -38,13 +38,13 @@ class ModelConfig:
     """Configuration for Yxanul TE v2.4 model"""
     # Model dimensions
     vocab_size: int = 200005  # SuperBPE tokenizer
-    hidden_size: int = 768
-    intermediate_size: int = 2048
+    hidden_size: int = 640  # 270M model default
+    intermediate_size: int = 1708  # ~2.67x hidden
     num_hidden_layers: int = 28
     
     # Attention configuration
-    num_attention_heads: int = 12
-    num_kv_heads: int = 2  # For GQA with 6:1 ratio
+    num_attention_heads: int = 10  # 10 heads * 64 = 640
+    num_kv_heads: int = 3  # For GQA with ~3:1 ratio
     head_dim: int = 64  # hidden_size // num_attention_heads
     
     # Positional encoding
@@ -142,10 +142,8 @@ class YxanulTEv2Model(nn.Module):
         # Build transformer layers using TE v2.4 TransformerLayer
         self.layers = nn.ModuleList()
         
-        # Initialize RoPE (TE v2.4 way) - will generate frequencies dynamically
+        # Initialize RoPE (TE v2.4 way)
         self.rope = RotaryPositionEmbedding(config.head_dim)
-        self.max_seq_len_cached = 0
-        self.freqs_cis = None
         
         for layer_idx in range(config.num_hidden_layers):
             layer = te_pytorch.TransformerLayer(
@@ -286,17 +284,11 @@ class YxanulTEv2Model(nn.Module):
         # Token embeddings
         hidden_states = self.embed_tokens(input_ids)
         
-        # Generate or retrieve RoPE frequencies for current sequence length
-        if self.freqs_cis is None or seq_len > self.max_seq_len_cached:
-            # Generate frequencies for at least this sequence length
-            # Round up to nearest 256 for efficiency
-            cache_len = ((seq_len + 255) // 256) * 256
-            cache_len = min(cache_len, self.config.max_position_embeddings)
-            self.freqs_cis = self.rope(cache_len).to(hidden_states.device)
-            self.max_seq_len_cached = cache_len
-        
-        # Slice to actual sequence length
-        freqs_cis = self.freqs_cis[:seq_len]
+        # Generate RoPE frequencies for EXACT sequence length
+        # TE v2.4+ requires exact match - no caching/slicing allowed
+        freqs_cis = self.rope(seq_len)
+        if hidden_states.is_cuda:
+            freqs_cis = freqs_cis.to(hidden_states.device)
         
         # Convert HuggingFace-style attention mask to TE format
         # HF: 1 = keep, 0 = mask out
