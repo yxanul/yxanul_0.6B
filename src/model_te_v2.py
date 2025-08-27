@@ -35,20 +35,20 @@ except ImportError:
 
 @dataclass
 class ModelConfig:
-    """Configuration for Yxanul TE v2.4 model"""
-    # Model dimensions
+    """Configuration for Yxanul TE v2.4 model - SINGLE SOURCE OF TRUTH"""
+    # Model dimensions - 270M configuration
     vocab_size: int = 200005  # SuperBPE tokenizer
-    hidden_size: int = 640  # 270M model default
-    intermediate_size: int = 1708  # ~2.67x hidden
-    num_hidden_layers: int = 28
+    hidden_size: int = 640  # THIS IS THE ONLY PLACE TO SET THIS
+    intermediate_size: int = 1708  # ~2.67x hidden for SwiGLU
+    num_hidden_layers: int = 28  # 28 layers for 270M model
     
     # Attention configuration
     num_attention_heads: int = 10  # 10 heads * 64 = 640
     num_kv_heads: int = 3  # For GQA with ~3:1 ratio
-    head_dim: int = 64  # hidden_size // num_attention_heads
+    head_dim: int = 64  # Always 64
     
     # Positional encoding
-    max_position_embeddings: int = 4096
+    max_position_embeddings: int = 2048  # Fixed training length
     rope_theta: float = 10000.0
     rope_scaling: Optional[Dict] = None
     

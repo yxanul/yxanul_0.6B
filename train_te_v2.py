@@ -54,10 +54,10 @@ def parse_args():
                        choices=['197M', '270M'], help='Model size preset')
     
     # Training configuration
-    parser.add_argument('--batch-size', type=int, default=32,
-                       help='Batch size per GPU')
-    parser.add_argument('--gradient-accumulation', type=int, default=1,
-                       help='Gradient accumulation steps')
+    parser.add_argument('--batch-size', type=int, default=1,
+                       help='Batch size per GPU (1 for 200k vocab to avoid OOM)')
+    parser.add_argument('--gradient-accumulation', type=int, default=32,
+                       help='Gradient accumulation steps (32 for effective batch size)')
     parser.add_argument('--learning-rate', type=float, default=6e-4,
                        help='Learning rate')
     parser.add_argument('--num-epochs', type=int, default=3,
@@ -119,27 +119,22 @@ def parse_args():
 
 
 def load_config(args):
-    """Load and merge configurations"""
+    """Create model configuration - SIMPLIFIED"""
     
-    # Always use 270M config when not in benchmark mode
-    if not args.benchmark and args.model_size == '270M':
-        # Force 270M configuration
-        config = ModelConfig(
-            vocab_size=200005,
-            hidden_size=640,  # Force correct 270M size
-            intermediate_size=1708,
-            num_hidden_layers=28,
-            num_attention_heads=10,
-            num_kv_heads=3,
-            head_dim=64,
-            max_position_embeddings=2048,  # Fixed seq length
-            use_fp8=not args.no_fp8,
-            use_factorized_embedding=True,
-            factorization_dim=128
-        )
-        print(f"Using 270M model config (hidden_size=640, layers=28)")
-    # Load model config from curriculum yaml if using curriculum
-    elif args.curriculum and os.path.exists(args.curriculum_config):
+    # Just use the ModelConfig defaults - they're already correct for 270M
+    config = ModelConfig()
+    
+    # Only override FP8 setting based on args
+    config.use_fp8 = not args.no_fp8
+    
+    print(f"Using ModelConfig defaults: hidden_size={config.hidden_size}, layers={config.num_hidden_layers}")
+    
+    return config
+
+# DELETE ALL THE OLD COMPLEX CONFIG LOADING
+def load_config_OLD_DELETE_THIS(args):
+    # This function is kept for reference but should be deleted
+    if False:
         print(f"DEBUG: Loading curriculum config from {args.curriculum_config}")
         with open(args.curriculum_config, 'r') as f:
             curriculum_yaml = yaml.safe_load(f)
