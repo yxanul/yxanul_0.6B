@@ -167,7 +167,7 @@ class YxanulTEv2Model(nn.Module):
                 layer_number=layer_idx + 1,
                 
                 # Attention settings
-                self_attn_mask_type='padding_causal',  # Support both padding and causal masking
+                self_attn_mask_type='padding_causal',  # Enables unpadding path in TE
                 attention_dropout=config.attention_dropout,
                 hidden_dropout=config.hidden_dropout,
                 
@@ -176,9 +176,9 @@ class YxanulTEv2Model(nn.Module):
                 fuse_qkv_params=config.fuse_qkv_params,  # Fused QKV
                 params_dtype=config.params_dtype,
                 
-                # Position encoding - RoPE is handled separately in TE v2.4
+                # Position encoding - RoPE configuration
                 seq_length=config.max_position_embeddings,
-                # Note: apply_rotary_pos_emb and rotary_percent removed for TE v2.4
+                rotary_pos_interleaved=True,  # Match the generator's interleaved=True
                 
                 # Parallelism (single GPU for now)
                 tp_size=1,
@@ -286,8 +286,17 @@ class YxanulTEv2Model(nn.Module):
         # Token embeddings
         hidden_states = self.embed_tokens(input_ids)
         
-        # Slice RoPE frequencies to current sequence length (NVIDIA AMPLIFY approach)
-        freqs_cis = self.freqs_cis[:seq_len].to(hidden_states.device, non_blocking=True)
+        # Calculate actual unpadded length for RoPE (critical for padding_causal mode)
+        # TE unpads internally, so RoPE must match the max unpadded length, not padded length
+        rope_len = seq_len  # Default to padded length
+        if attention_mask is not None:
+            # HF convention: 1 = real token, 0 = padding
+            # Find max number of real tokens across batch
+            rope_len = int(attention_mask.sum(dim=1).max().item())
+            rope_len = max(1, min(rope_len, seq_len))  # Safety clamp
+        
+        # Slice RoPE to actual unpadded length (matches TE's internal unpadding)
+        freqs_cis = self.freqs_cis[:rope_len].to(hidden_states.device, non_blocking=True)
         
         # Convert HuggingFace-style attention mask to TE format
         # HF: 1 = keep, 0 = mask out

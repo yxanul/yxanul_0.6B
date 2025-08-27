@@ -121,8 +121,28 @@ def parse_args():
 def load_config(args):
     """Load and merge configurations"""
     
-    # Base model config with factorized embeddings
-    if args.model_size == '197M':
+    # Load model config from curriculum yaml if using curriculum
+    if args.curriculum and os.path.exists(args.curriculum_config):
+        with open(args.curriculum_config, 'r') as f:
+            curriculum_yaml = yaml.safe_load(f)
+        if 'model' in curriculum_yaml:
+            # Use model config from curriculum yaml
+            model_cfg = curriculum_yaml['model']
+            config = ModelConfig(
+                vocab_size=model_cfg.get('vocab_size', 200005),
+                hidden_size=model_cfg.get('hidden_size', 640),
+                intermediate_size=model_cfg.get('intermediate_size', 1708),
+                num_hidden_layers=model_cfg.get('num_hidden_layers', 28),
+                num_attention_heads=model_cfg.get('num_attention_heads', 10),
+                num_kv_heads=model_cfg.get('num_kv_heads', 3),
+                head_dim=model_cfg.get('head_dim', 64),
+                max_position_embeddings=model_cfg.get('max_position_embeddings', 4096),
+                use_fp8=model_cfg.get('use_fp8', not args.no_fp8),
+                use_factorized_embedding=model_cfg.get('use_factorized_embedding', True),
+                factorization_dim=model_cfg.get('factorization_dim', 128)
+            )
+            print(f"Loaded model config from {args.curriculum_config}")
+    elif args.model_size == '197M':
         config = ModelConfig(
             vocab_size=200005,
             hidden_size=512,  # Corrected for actual 197M
