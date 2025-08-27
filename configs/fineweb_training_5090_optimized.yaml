@@ -24,57 +24,57 @@ training:
   use_curriculum: true
   
   curriculum_stages:
-    # Stage 1: Short documents (256 tokens) - Much better GPU utilization
-    # Still easy for model but actually uses the hardware
+    # Stage 1: Short documents (256 tokens) - Better GPU utilization with safe memory
+    # With 200k vocab, must be conservative on batch size
     - step: 0
       seq_len: 256
-      batch_size: 64  # Conservative for 32GB with 200k vocab
+      batch_size: 8  # Safe for 200k vocab (was 64 - too large!)
       lr_scale: 0.5
       grad_clip: 0.5
       warmup_steps: 1000
-      gradient_accumulation_steps: 1  # 64 effective batch
+      gradient_accumulation_steps: 8  # 64 effective batch
       description: "Short documents and paragraphs"
-      # 16,384 tokens per batch - reasonable GPU usage
+      # 16,384 tokens per batch effective
     
     # Stage 2: Medium documents (512 tokens)
     - step: 5000
       seq_len: 512
-      batch_size: 32
+      batch_size: 4
       lr_scale: 0.75
       grad_clip: 0.7
-      gradient_accumulation_steps: 1  # 32 effective batch
+      gradient_accumulation_steps: 8  # 32 effective batch
       description: "Medium-length articles"
-      # 16,384 tokens per batch
+      # 16,384 tokens per batch effective
     
     # Stage 3: Standard documents (1024 tokens)
     - step: 15000
       seq_len: 1024
-      batch_size: 16
+      batch_size: 2
       lr_scale: 1.0
       grad_clip: 0.9
-      gradient_accumulation_steps: 1  # 16 effective batch
+      gradient_accumulation_steps: 8  # 16 effective batch
       description: "Full articles and stories"
-      # 16,384 tokens per batch
+      # 16,384 tokens per batch effective
     
     # Stage 4: Long documents (1536 tokens)
     - step: 30000
       seq_len: 1536
-      batch_size: 8
+      batch_size: 1
       lr_scale: 1.1
       grad_clip: 1.0
-      gradient_accumulation_steps: 2  # 16 effective batch
+      gradient_accumulation_steps: 16  # 16 effective batch
       description: "Long-form content"
-      # 24,576 tokens per batch
+      # 24,576 tokens per batch effective
     
     # Stage 5: Full context (2048 tokens)
     - step: 50000
       seq_len: 2048
-      batch_size: 4
+      batch_size: 1
       lr_scale: 1.2
       grad_clip: 1.0
-      gradient_accumulation_steps: 4  # 16 effective batch
+      gradient_accumulation_steps: 16  # 16 effective batch
       description: "Maximum context window"
-      # 32,768 tokens per batch
+      # 32,768 tokens per batch effective
 
   gradient_accumulation_steps: 1
   gradient_checkpointing: true
