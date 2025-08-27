@@ -39,8 +39,8 @@ training:
   tokenizer: "superbpe_t80k"  # Fast variant
   
   # Training parameters aligned with train_te_v2.py args - RTX 5090 (32GB)
-  batch_size: 1  # Ultra conservative - single sample at 2048 seq_len
-  gradient_accumulation_steps: 16  # Effective batch size of 16
+  batch_size: 4  # Increased from 1 - we have 32GB and only using 36%
+  gradient_accumulation_steps: 8  # Effective batch size of 32
   learning_rate: 6.0e-4  # Default from train_te_v2.py
   num_epochs: 1  # Single epoch as requested
   max_steps: -1  # Run full epochs
@@ -82,27 +82,27 @@ training:
   use_curriculum: true
   curriculum_stages:
     # Progressive sequence length curriculum for 1B tokens (1 epoch)
-    # Conservative batch sizes for RTX 4090 (24GB VRAM)
-    # Model + optimizer ~2.5GB, leaving ~21GB for activations
+    # Optimized batch sizes for RTX 5090 (32GB VRAM)
+    # Model + optimizer ~2.5GB, leaving ~29GB for activations
     
     - stage: 1
       name: "Token Level"
       seq_len: 16
       tokens: 20_000_000  # 2% of data
-      batch_size: 64  # Reduced for 200k vocab
-      gradient_accumulation_steps: 4
+      batch_size: 256  # Increased 4x - short sequences use little memory
+      gradient_accumulation_steps: 1
       dataset_mix:
         fineweb: 0.70  # Already mixed in dataset
         math: 0.15
         code: 0.15
-      estimated_vram_gb: 3.0
+      estimated_vram_gb: 4.0
     
     - stage: 2
       name: "Phrase Level"
       seq_len: 32
       tokens: 30_000_000  # 3% of data
-      batch_size: 32  # Reduced for 200k vocab
-      gradient_accumulation_steps: 8
+      batch_size: 128  # Increased 4x - short sequences
+      gradient_accumulation_steps: 2
       dataset_mix:
         fineweb: 0.70
         math: 0.15
@@ -113,8 +113,8 @@ training:
       name: "Short Sentences"
       seq_len: 64
       tokens: 40_000_000  # 4% of data
-      batch_size: 16  # Reduced for 200k vocab
-      gradient_accumulation_steps: 8  # Effective batch 128
+      batch_size: 64  # Increased 4x
+      gradient_accumulation_steps: 2  # Effective batch 128
       dataset_mix:
         fineweb: 0.70
         math: 0.15
@@ -125,8 +125,8 @@ training:
       name: "Full Sentences"
       seq_len: 128
       tokens: 60_000_000  # 6% of data
-      batch_size: 8  # Reduced for 200k vocab
-      gradient_accumulation_steps: 16  # Effective batch 128
+      batch_size: 32  # Increased 4x
+      gradient_accumulation_steps: 4  # Effective batch 128
       dataset_mix:
         fineweb: 0.70  # Already mixed in dataset
         math: 0.15
@@ -137,8 +137,8 @@ training:
       name: "Paragraph Understanding"
       seq_len: 256
       tokens: 80_000_000  # 8% of data
-      batch_size: 4  # Reduced for 200k vocab
-      gradient_accumulation_steps: 16  # Effective batch 64
+      batch_size: 16  # Increased 4x
+      gradient_accumulation_steps: 4  # Effective batch 64
       dataset_mix:
         fineweb: 0.70
         math: 0.15
@@ -149,8 +149,8 @@ training:
       name: "Extended Paragraphs"
       seq_len: 512
       tokens: 120_000_000  # 12% of data
-      batch_size: 4  # Reduced for RTX 5090 with large vocab
-      gradient_accumulation_steps: 8  # Effective batch 32
+      batch_size: 8  # Increased 2x
+      gradient_accumulation_steps: 4  # Effective batch 32
       dataset_mix:
         fineweb: 0.70
         math: 0.15
@@ -161,8 +161,8 @@ training:
       name: "Document Structure"
       seq_len: 1024
       tokens: 150_000_000  # 15% of data
-      batch_size: 2  # Reduced for RTX 5090 with large vocab
-      gradient_accumulation_steps: 8  # Effective batch 16
+      batch_size: 4  # Increased 2x
+      gradient_accumulation_steps: 4  # Effective batch 16
       dataset_mix:
         fineweb: 0.70
         math: 0.15
@@ -173,8 +173,8 @@ training:
       name: "Long Context Mastery"
       seq_len: 2048
       tokens: 500_000_000  # 50% of data - main training
-      batch_size: 1  # Single sample only for RTX 5090 with 200k vocab
-      gradient_accumulation_steps: 16  # Effective batch 16
+      batch_size: 2  # Doubled - we only used 36% VRAM with batch_size=1
+      gradient_accumulation_steps: 8  # Effective batch 16
       dataset_mix:
         fineweb: 0.70
         math: 0.15

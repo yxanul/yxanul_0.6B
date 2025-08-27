@@ -256,10 +256,64 @@ def estimate_dataset_size(dataset_name: str, split: str = "train") -> int:
 
 
 # For backward compatibility with imports
-def create_curriculum_dataloader(*args, **kwargs):
-    """Curriculum loading not supported in simple version."""
-    print("WARNING: Curriculum loading called but using simple dataloader")
-    return create_dataloader(**kwargs)
+def create_curriculum_dataloader(
+    curriculum_config: dict,
+    tokenizer=None,
+    batch_size: int = 1,
+    max_length: int = None,  # Will be set from curriculum stage
+    num_workers: int = 2,
+    current_stage: int = 0,
+    **kwargs
+) -> tuple:
+    """Create a DataLoader with curriculum-specific settings.
+    
+    Args:
+        curriculum_config: Full curriculum configuration dict
+        tokenizer: Tokenizer to use
+        batch_size: Batch size (from curriculum stage)
+        max_length: Override sequence length (if None, uses stage seq_len)
+        num_workers: DataLoader workers
+        current_stage: Current curriculum stage index
+    """
+    
+    # Get current stage configuration
+    stages = curriculum_config['training']['curriculum_stages']
+    if current_stage >= len(stages):
+        current_stage = len(stages) - 1
+    
+    stage_config = stages[current_stage]
+    
+    # Use stage-specific sequence length unless overridden
+    if max_length is None:
+        max_length = stage_config.get('seq_len', 2048)
+    
+    # Use stage-specific batch size if not provided
+    if 'batch_size' in stage_config:
+        batch_size = stage_config['batch_size']
+    
+    print(f"\nCurriculum Stage {current_stage + 1}/{len(stages)}: {stage_config.get('name', 'Unknown')}")
+    print(f"  Sequence length: {max_length}")
+    print(f"  Batch size: {batch_size}")
+    print(f"  Target tokens: {stage_config.get('tokens', 'Not specified'):,}")
+    
+    # Get dataset configuration
+    dataset_name = curriculum_config['training'].get('dataset', 'Yxanul/experimental-pretrain-1b')
+    dataset_path = curriculum_config['training'].get('dataset_path', 'experimental-pretrain-1b')
+    dataset_file = curriculum_config['training'].get('dataset_file', 'dataset_1b.parquet')
+    
+    # Construct full path
+    full_path = f"./{dataset_path}/{dataset_file}"
+    
+    # Create regular dataloader with curriculum-specific settings
+    return create_dataloader(
+        dataset_name=full_path,
+        tokenizer=tokenizer,
+        batch_size=batch_size,
+        max_length=max_length,
+        num_workers=num_workers,
+        split="train",  # Always use full dataset for curriculum
+        **kwargs
+    )
 
 
 class MixedDataset(Dataset):

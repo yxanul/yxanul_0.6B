@@ -272,13 +272,13 @@ def main():
             split="train"
         )
         
-        # For validation, use a simple split from FineWeb
+        # For validation, use last 5% of local dataset
         val_dataloader, val_dataset = create_dataloader(
-            dataset_name="HuggingFaceFW/fineweb-edu",
+            dataset_name=args.dataset,
             tokenizer=tokenizer,
             batch_size=args.batch_size,
             max_length=stage_config['seq_len'],
-            num_workers=0,
+            num_workers=args.num_workers,
             split="train[95%:]"
         )
         
@@ -441,11 +441,11 @@ def main():
                     
                     # Update validation dataloader sequence length
                     val_dataloader, _ = create_dataloader(
-                        dataset_name="HuggingFaceFW/fineweb-edu",
+                        dataset_name=args.dataset,
                         tokenizer=tokenizer,
                         batch_size=args.batch_size,
                         max_length=new_stage['seq_len'],
-                        num_workers=0,
+                        num_workers=args.num_workers,
                         split="train[95%:]"
                     )
                     

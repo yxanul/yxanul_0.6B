@@ -24,7 +24,7 @@ import math
 try:
     import transformer_engine as te
     import transformer_engine.pytorch as te_pytorch
-    from transformer_engine.pytorch.attention import RotaryPositionEmbedding
+    from transformer_engine.pytorch.attention.rope import RotaryPositionEmbedding
     from transformer_engine.common.recipe import DelayedScaling, Format
     TE_AVAILABLE = True
     print(f"TransformerEngine v{te.__version__} loaded successfully")
@@ -101,7 +101,7 @@ class FactorizedEmbedding(nn.Module):
     def _init_weights(self):
         """Initialize weights with proper scaling"""
         nn.init.normal_(self.embed.weight, 0, 0.02)
-        nn.init.normal_(self.proj.weight, 0, math.sqrt(2.0 / self.factorization_dim))
+        nn.init.normal_(self.proj.weight, 0, 0.02)  # Standard LLM initialization
     
     def forward(self, input_ids: torch.Tensor) -> torch.Tensor:
         x = self.embed(input_ids)

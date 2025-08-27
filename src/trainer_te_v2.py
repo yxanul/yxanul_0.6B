@@ -11,6 +11,7 @@ Key differences from old trainer:
 
 import os
 import time
+import math
 import torch
 import torch.nn as nn
 from torch.optim import AdamW
@@ -53,7 +54,7 @@ class TEv2Trainer(EnhancedTrainer):
         use_fp8: bool = True,
         fp8_format: str = "hybrid",  # "hybrid", "e4m3", or "mxfp8"
         fp8_recipe=None,  # Optionally pass pre-created recipe
-        calibration_steps: int = 10,  # Steps to calibrate FP8 scaling
+        calibration_steps: int = 64,  # More calibration for FP8 stability
         gradient_accumulation_steps: int = 1,
         learning_rate: float = 6e-4,
         batch_size: int = 1,
@@ -87,12 +88,25 @@ class TEv2Trainer(EnhancedTrainer):
             weight_decay=0.1
         )
         
-        # Initialize scheduler (cosine with warmup)
-        self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-            self.optimizer,
-            T_max=kwargs.get('num_training_steps', 10000),
-            eta_min=self.learning_rate * 0.1
-        )
+        # Initialize scheduler with linear warmup + cosine decay
+        self.warmup_steps = kwargs.get('warmup_steps', 1000)
+        self.num_training_steps = kwargs.get('num_training_steps', 10000)
+        
+        # Use linear warmup followed by cosine decay
+        from torch.optim.lr_scheduler import LambdaLR
+        
+        def lr_lambda(current_step: int):
+            """Linear warmup then cosine decay"""
+            if current_step < self.warmup_steps:
+                # Linear warmup
+                return float(current_step) / float(max(1, self.warmup_steps))
+            else:
+                # Cosine decay
+                progress = float(current_step - self.warmup_steps) / float(max(1, self.num_training_steps - self.warmup_steps))
+                return max(0.1, 0.5 * (1.0 + math.cos(math.pi * progress)))
+        
+        self.scheduler = LambdaLR(self.optimizer, lr_lambda)
+        print(f"Scheduler: {self.warmup_steps} warmup steps, then cosine decay to 10% LR")
         
         # MXFP8 is only available on Blackwell GPUs
         if fp8_format == "mxfp8":
@@ -152,12 +166,9 @@ class TEv2Trainer(EnhancedTrainer):
             )
     
     def _adjust_optimizer_for_fp8(self):
-        """Adjust optimizer settings for FP8 training"""
-        # FP8 often benefits from slightly higher learning rates
-        for param_group in self.optimizer.param_groups:
-            param_group['lr'] *= 1.2
-        
-        print(f"Adjusted learning rate for FP8: {self.optimizer.param_groups[0]['lr']:.2e}")
+        """Keep LR unchanged for FP8 - rely on warmup for stability"""
+        print(f"FP8 enabled; keeping LR at {self.optimizer.param_groups[0]['lr']:.2e}")
+        print("Using warmup scheduler for stable training start")
     
     def train_step(self, batch: Dict[str, torch.Tensor]) -> Dict[str, float]:
         """
@@ -227,7 +238,10 @@ class TEv2Trainer(EnhancedTrainer):
         
         # Calculate metrics
         with torch.no_grad():
-            perplexity = torch.exp(loss * self.gradient_accumulation_steps).item()
+            actual_loss = (loss.detach() if loss.requires_grad else loss) * self.gradient_accumulation_steps
+            perplexity = torch.exp(actual_loss).item()
+            # Clamp perplexity to reasonable range
+            perplexity = min(perplexity, 1e6)  # Cap at 1M to avoid overflow
             
             # Calculate accuracy if we have logits
             accuracy = 0
@@ -250,7 +264,7 @@ class TEv2Trainer(EnhancedTrainer):
         tokens_per_sec = (batch_size * seq_len) / step_time
         
         metrics = {
-            "loss": (loss.detach().item() if loss.requires_grad else loss.item()) * self.gradient_accumulation_steps,
+            "loss": actual_loss.item(),
             "perplexity": perplexity,
             "accuracy": accuracy,
             "learning_rate": self.optimizer.param_groups[0]['lr'],
@@ -258,6 +272,22 @@ class TEv2Trainer(EnhancedTrainer):
             "step_time": step_time,
             "global_step": self.global_step,
         }
+        
+        # Log to WandB if available
+        try:
+            import wandb
+            if wandb.run is not None:
+                wandb.log({
+                    "train/loss": metrics["loss"],
+                    "train/perplexity": metrics["perplexity"],
+                    "train/accuracy": metrics["accuracy"],
+                    "train/learning_rate": metrics["learning_rate"],
+                    "train/tokens_per_second": metrics["tokens_per_second"],
+                    "train/gpu_memory_gb": torch.cuda.memory_allocated() / 1e9 if torch.cuda.is_available() else 0,
+                    "train/gpu_utilization": torch.cuda.utilization() if torch.cuda.is_available() and hasattr(torch.cuda, 'utilization') else 0,
+                }, step=self.global_step)
+        except Exception as e:
+            pass  # Silently fail if WandB not available
         
         # Add FP8-specific metrics
         if self.use_fp8:
