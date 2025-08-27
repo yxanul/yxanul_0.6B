@@ -66,6 +66,8 @@ def parse_args():
                        help='Maximum training steps')
     parser.add_argument('--warmup-steps', type=int, default=500,
                        help='Warmup steps (short for faster stabilization)')
+    parser.add_argument('--max-grad-norm', type=float, default=0.5,
+                       help='Maximum gradient norm for clipping (0.5 for stability)')
     
     # FP8 configuration
     parser.add_argument('--fp8-format', type=str, default='hybrid',
