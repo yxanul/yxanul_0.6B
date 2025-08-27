@@ -12,10 +12,10 @@ from transformers import AutoTokenizer
 from tqdm import tqdm
 
 def prepare_dataset(
-    parquet_path="experimental-pretrain-1b/dataset_1b.parquet",
+    parquet_path="../experimental-pretrain-1b/dataset_1b.parquet",  # Go up one level to root
     tokenizer_name="gpt2",  # Start with GPT2's 50k vocab for testing
     max_length=2048,
-    output_dir="experimental/data",
+    output_dir="data",  # Save in experimental/data (we're already in experimental/)
     val_split=0.05
 ):
     """Convert parquet dataset to memmap files for fast training."""
@@ -25,8 +25,8 @@ def prepare_dataset(
     # Load tokenizer
     print(f"Loading tokenizer: {tokenizer_name}")
     if tokenizer_name == "superbpe":
-        # Use the cached SuperBPE tokenizer
-        tokenizer = AutoTokenizer.from_pretrained("tokenizer_cache/superbpe-t80k-fast")
+        # Use the cached SuperBPE tokenizer (at root level)
+        tokenizer = AutoTokenizer.from_pretrained("../tokenizer_cache/superbpe-t80k-fast")
         print(f"Loaded SuperBPE with {len(tokenizer)} vocab size")
     else:
         tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
@@ -98,7 +98,7 @@ if __name__ == "__main__":
     metadata = prepare_dataset(
         tokenizer_name="gpt2",
         max_length=2048,
-        output_dir="experimental/data"
+        output_dir="data"  # Will create data/ folder in experimental/
     )
     
     print(f"\nDataset ready for training:")

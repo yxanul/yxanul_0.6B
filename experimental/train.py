@@ -28,7 +28,7 @@ from model import create_model, ModelConfig
 vocab_size = 50257  # GPT-2 vocab size (or set from metadata.json)
 
 # Data
-data_dir = "experimental/data"
+data_dir = "data"  # Relative to experimental/ folder
 batch_size = 4  # Micro batch size
 block_size = 2048  # Context length
 gradient_accumulation_steps = 32  # Effective batch = 4 * 32 = 128
@@ -54,7 +54,7 @@ dtype = 'bfloat16' if torch.cuda.is_bf16_supported() else 'float16'
 compile_model = False  # torch.compile (set True if you have PyTorch 2.0+)
 
 # Output
-out_dir = "experimental/outputs"
+out_dir = "outputs"  # Relative to experimental/ folder
 save_interval = 5000
 
 # -----------------------------------------------------------------------------
