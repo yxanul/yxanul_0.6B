@@ -207,12 +207,21 @@ class MultiDomainValidator:
         
         results = {}
         
+        # Adjust max_batches per domain based on dataset size
+        domain_max_batches = {
+            'english': min(max_batches, 60),  # C4 has ~62 batches
+            'math': min(max_batches, 40),      # GSM8K has ~41 batches  
+            'code': min(max_batches, 5)        # HumanEval has only ~5 batches
+        }
+        
         for domain in self.domains:
             print(f"\n{'='*50}")
             print(f"Validating on {domain.upper()} domain")
             print(f"{'='*50}")
             
-            metrics = self.validate_domain(model, domain, max_batches, device)
+            # Use domain-specific batch limit
+            domain_batches = domain_max_batches.get(domain, max_batches)
+            metrics = self.validate_domain(model, domain, domain_batches, device)
             results[domain] = metrics
             
             # Print immediate results

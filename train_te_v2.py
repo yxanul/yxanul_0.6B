@@ -30,7 +30,7 @@ sys.path.append('src')
 # Import TE v2.4 components
 from model_te_v2 import create_te_v2_model, ModelConfig
 from trainer_te_v2 import TEv2Trainer
-from data_pipeline import create_dataloader, create_tokenizer
+from data_pipeline import create_dataloader, create_tokenizer, create_curriculum_dataloader
 from checkpoint_manager import CheckpointManager
 
 # Check for TransformerEngine
@@ -83,6 +83,8 @@ def parse_args():
                        help='Save checkpoint every N steps')
     parser.add_argument('--eval-steps', type=int, default=2000,
                        help='Evaluate every N steps')
+    parser.add_argument('--multi-domain-eval-steps', type=int, default=10000,
+                       help='Run multi-domain validation every N steps')
     parser.add_argument('--save-total-limit', type=int, default=3,
                        help='Maximum checkpoints to keep')
     
@@ -93,6 +95,15 @@ def parse_args():
                        help='Maximum sequence length')
     parser.add_argument('--num-workers', type=int, default=4,
                        help='DataLoader workers')
+    
+    # Curriculum training
+    parser.add_argument('--curriculum', action='store_true',
+                       help='Enable curriculum training with streaming')
+    parser.add_argument('--curriculum-config', type=str, 
+                       default='configs/yxanul_270m_progressive_curriculum.yaml',
+                       help='Curriculum configuration file')
+    parser.add_argument('--target-tokens', type=int, default=1_000_000_000,
+                       help='Target tokens for curriculum training (1B default)')
     
     # Other
     parser.add_argument('--seed', type=int, default=42,
@@ -110,7 +121,7 @@ def parse_args():
 def load_config(args):
     """Load and merge configurations"""
     
-    # Base model config
+    # Base model config with factorized embeddings
     if args.model_size == '197M':
         config = ModelConfig(
             vocab_size=200005,
@@ -119,7 +130,9 @@ def load_config(args):
             num_hidden_layers=28,
             num_attention_heads=12,
             num_kv_heads=2,
-            use_fp8=not args.no_fp8
+            use_fp8=not args.no_fp8,
+            use_factorized_embedding=True,
+            factorization_dim=128
         )
     else:  # 270M
         config = ModelConfig(
@@ -129,7 +142,9 @@ def load_config(args):
             num_hidden_layers=32,
             num_attention_heads=14,
             num_kv_heads=2,
-            use_fp8=not args.no_fp8
+            use_fp8=not args.no_fp8,
+            use_factorized_embedding=True,
+            factorization_dim=128
         )
     
     # Load from file if provided
@@ -196,27 +211,66 @@ def main():
     tokenizer = create_tokenizer()
     
     # Create dataloaders
-    print(f"Loading dataset: {args.dataset}")
-    train_dataloader, train_dataset = create_dataloader(
-        dataset_name=args.dataset,
-        tokenizer=tokenizer,
-        batch_size=args.batch_size,
-        max_length=args.max_length,
-        num_workers=args.num_workers,
-        split="train[:95%]"
-    )
-    
-    val_dataloader, val_dataset = create_dataloader(
-        dataset_name=args.dataset,
-        tokenizer=tokenizer,
-        batch_size=args.batch_size,
-        max_length=args.max_length,
-        num_workers=1,
-        split="train[95%:]"
-    )
-    
-    print(f"Train samples: {len(train_dataset):,}")
-    print(f"Val samples: {len(val_dataset):,}")
+    if args.curriculum:
+        print(f"Loading curriculum configuration from {args.curriculum_config}")
+        with open(args.curriculum_config, 'r') as f:
+            curriculum_config = yaml.safe_load(f)
+        
+        print(f"\nCurriculum Training Enabled:")
+        print(f"  Target tokens: {args.target_tokens:,}")
+        print(f"  Number of stages: {len(curriculum_config['training']['curriculum_stages'])}")
+        print(f"  Streaming from HuggingFace: Yes")
+        
+        # Start with first stage
+        current_stage = 0
+        stage_config = curriculum_config['training']['curriculum_stages'][current_stage]
+        
+        print(f"\nStarting with Stage 1: {stage_config['name']}")
+        print(f"  Sequence length: {stage_config['seq_len']}")
+        print(f"  Batch size: {stage_config['batch_size']}")
+        print(f"  Dataset mix: {stage_config['dataset_mix']}")
+        
+        train_dataloader, train_dataset = create_curriculum_dataloader(
+            curriculum_config=curriculum_config,
+            tokenizer=tokenizer,
+            batch_size=stage_config['batch_size'],
+            current_stage=current_stage,
+            num_workers=0,  # Streaming works best with 0 workers
+            split="train"
+        )
+        
+        # For validation, use a simple split from FineWeb
+        val_dataloader, val_dataset = create_dataloader(
+            dataset_name="HuggingFaceFW/fineweb-edu",
+            tokenizer=tokenizer,
+            batch_size=args.batch_size,
+            max_length=stage_config['seq_len'],
+            num_workers=0,
+            split="train[95%:]"
+        )
+        
+    else:
+        print(f"Loading dataset: {args.dataset}")
+        train_dataloader, train_dataset = create_dataloader(
+            dataset_name=args.dataset,
+            tokenizer=tokenizer,
+            batch_size=args.batch_size,
+            max_length=args.max_length,
+            num_workers=args.num_workers,
+            split="train[:95%]"
+        )
+        
+        val_dataloader, val_dataset = create_dataloader(
+            dataset_name=args.dataset,
+            tokenizer=tokenizer,
+            batch_size=args.batch_size,
+            max_length=args.max_length,
+            num_workers=1,
+            split="train[95%:]"
+        )
+        
+        print(f"Train samples: {len(train_dataset):,}")
+        print(f"Val samples: {len(val_dataset):,}")
     
     # Create trainer
     print("\nInitializing TE v2.4 Trainer...")
@@ -294,6 +348,13 @@ def main():
     global_step = 0
     best_val_ppl = float('inf')
     
+    # Curriculum tracking
+    if args.curriculum:
+        cumulative_tokens = 0
+        current_stage_idx = 0
+        stages = curriculum_config['training']['curriculum_stages']
+        stage_tokens = 0
+    
     for epoch in range(args.num_epochs):
         print(f"\nEpoch {epoch + 1}/{args.num_epochs}")
         epoch_start = time.time()
@@ -301,19 +362,79 @@ def main():
         epoch_tokens = 0
         
         for step, batch in enumerate(train_dataloader):
+            # Check if we need to transition to next curriculum stage
+            if args.curriculum:
+                batch_tokens = batch['input_ids'].shape[0] * batch['input_ids'].shape[1]
+                cumulative_tokens += batch_tokens
+                stage_tokens += batch_tokens
+                
+                # Check if we've reached target tokens
+                if cumulative_tokens >= args.target_tokens:
+                    print(f"\n{'='*60}")
+                    print(f"REACHED TARGET: {args.target_tokens:,} tokens!")
+                    print(f"{'='*60}")
+                    break
+                
+                # Check if we need to transition to next stage
+                current_stage = stages[current_stage_idx]
+                if stage_tokens >= current_stage['tokens'] and current_stage_idx < len(stages) - 1:
+                    current_stage_idx += 1
+                    stage_tokens = 0
+                    new_stage = stages[current_stage_idx]
+                    
+                    print(f"\n{'='*60}")
+                    print(f"Transitioning to Stage {current_stage_idx + 1}: {new_stage['name']}")
+                    print(f"  Sequence length: {new_stage['seq_len']}")
+                    print(f"  Batch size: {new_stage['batch_size']}")
+                    print(f"  Dataset mix: {new_stage['dataset_mix']}")
+                    print(f"{'='*60}\n")
+                    
+                    # Update dataset stage
+                    train_dataset.update_stage(current_stage_idx)
+                    
+                    # Recreate dataloader with new batch size
+                    train_dataloader, _ = create_curriculum_dataloader(
+                        curriculum_config=curriculum_config,
+                        tokenizer=tokenizer,
+                        batch_size=new_stage['batch_size'],
+                        current_stage=current_stage_idx,
+                        num_workers=0,
+                        split="train"
+                    )
+                    
+                    # Update validation dataloader sequence length
+                    val_dataloader, _ = create_dataloader(
+                        dataset_name="HuggingFaceFW/fineweb-edu",
+                        tokenizer=tokenizer,
+                        batch_size=args.batch_size,
+                        max_length=new_stage['seq_len'],
+                        num_workers=0,
+                        split="train[95%:]"
+                    )
+                    
+                    # Break inner loop to restart with new dataloader
+                    break
+            
             # Training step
             metrics = trainer.train_step(batch)
             
             epoch_loss += metrics['loss']
-            epoch_tokens += args.batch_size * args.max_length
+            epoch_tokens += args.batch_size * (args.max_length if not args.curriculum else stages[current_stage_idx]['seq_len'])
             global_step += 1
             
             # Logging
             if global_step % 100 == 0:
-                print(f"  Step {global_step}: Loss={metrics['loss']:.4f}, "
-                      f"PPL={metrics['perplexity']:.2f}, "
-                      f"Tokens/sec={metrics['tokens_per_second']:.0f}, "
-                      f"LR={metrics['learning_rate']:.2e}")
+                log_msg = f"  Step {global_step}: Loss={metrics['loss']:.4f}, "
+                log_msg += f"PPL={metrics['perplexity']:.2f}, "
+                log_msg += f"Tokens/sec={metrics['tokens_per_second']:.0f}, "
+                log_msg += f"LR={metrics['learning_rate']:.2e}"
+                
+                if args.curriculum:
+                    progress_pct = (cumulative_tokens / args.target_tokens) * 100
+                    log_msg += f" | Stage {current_stage_idx + 1}/{len(stages)} "
+                    log_msg += f"({cumulative_tokens:,}/{args.target_tokens:,} tokens, {progress_pct:.1f}%)"
+                
+                print(log_msg)
             
             # Validation
             if global_step % args.eval_steps == 0:
@@ -324,6 +445,19 @@ def main():
                 if val_ppl < best_val_ppl:
                     best_val_ppl = val_ppl
                     print(f"New best validation perplexity: {best_val_ppl:.2f}")
+            
+            # Multi-domain validation (less frequent, more comprehensive)
+            if args.multi_domain_eval_steps > 0 and global_step % args.multi_domain_eval_steps == 0:
+                print(f"\nRunning multi-domain validation at step {global_step}...")
+                try:
+                    # Use smaller batch count since validation sets are small
+                    # This will use all of HumanEval (5 batches), most of GSM8K (20 batches), 
+                    # and a good sample of C4 (20 batches)
+                    domain_results = trainer.validate_multi_domain(max_batches=20)
+                    # Domain results are already printed by the validator
+                except Exception as e:
+                    print(f"Multi-domain validation failed: {e}")
+                    print("Continuing with regular training...")
             
             # Checkpointing
             if global_step % args.save_steps == 0:
@@ -366,6 +500,17 @@ def main():
     final_val_ppl = trainer.validate(val_dataloader, max_batches=100)
     print(f"Final validation perplexity: {final_val_ppl:.2f}")
     print(f"Best validation perplexity: {best_val_ppl:.2f}")
+    
+    # Final multi-domain validation
+    if args.multi_domain_eval_steps > 0:
+        print("\nFinal multi-domain validation...")
+        try:
+            # Use all available data for final validation
+            # This will use all batches from each domain (max 60 for C4)
+            final_domain_results = trainer.validate_multi_domain(max_batches=100)
+            print("\nMulti-domain validation complete. See summary above.")
+        except Exception as e:
+            print(f"Final multi-domain validation failed: {e}")
     
     # Save final checkpoint
     final_checkpoint = checkpoint_manager.save_checkpoint(
