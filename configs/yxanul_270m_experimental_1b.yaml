@@ -4,11 +4,11 @@
 model:
   name: "Yxanul-270M-TEv2"
   vocab_size: 200005  # SuperBPE tokenizer
-  hidden_size: 896
-  intermediate_size: 2400  # ~2.67x hidden for SwiGLU
-  num_hidden_layers: 32
-  num_attention_heads: 14
-  num_kv_heads: 2  # GQA with 7:1 ratio
+  hidden_size: 640  # Wider model with fewer layers
+  intermediate_size: 1708  # ~2.67x hidden for SwiGLU
+  num_hidden_layers: 28  # Reduced from 32 for better per-layer capacity
+  num_attention_heads: 10  # 10 heads * 64 dim = 640
+  num_kv_heads: 3  # GQA with ~3:1 ratio
   head_dim: 64
   max_position_embeddings: 4096
   rope_theta: 10000.0
@@ -184,10 +184,10 @@ training:
 # Performance expectations for 1 epoch
 performance:
   rtx_5090:
-    tokens_per_sec: 80000  # Blackwell architecture improvements
-    peak_memory_gb: 25.0  # Stage 8 peak usage
-    time_for_1_epoch_hours: 3.5  # 1B tokens / 80k tps / 3600
-    safe_margin: "7GB headroom at peak usage"
+    tokens_per_sec: 90000  # Faster with smaller 270M model
+    peak_memory_gb: 18.0  # Lower with corrected model size
+    time_for_1_epoch_hours: 3.1  # 1B tokens / 90k tps / 3600
+    safe_margin: "14GB headroom at peak usage"
   
   h100:
     tokens_per_sec: 150000  # Can use larger batches
@@ -206,8 +206,8 @@ performance:
 
 # Memory safety calculations (RTX 5090 - 32GB)
 memory_breakdown:
-  model_params: "470M * 2 bytes = 940MB"  # Actual model is 470M not 270M
-  optimizer_states: "470M * 8 bytes = 3.76GB (AdamW)"
+  model_params: "270M * 2 bytes = 540MB"  # Corrected to actual 270M
+  optimizer_states: "270M * 8 bytes = 2.16GB (AdamW)"
   fp8_overhead: "~500MB (scaling factors, stats)"
   base_usage: "~5GB total"
   
