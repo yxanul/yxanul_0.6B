@@ -62,29 +62,56 @@ class PretrainDataset(Dataset):
         import os
         from pathlib import Path
         
-        # Check for local dataset_1b.parquet file
+        # Check for local dataset_1b.parquet file - check both relative and absolute paths
         local_paths = [
             Path("dataset_1b.parquet"),
             Path("experimental-pretrain-1b/dataset_1b.parquet"),
+            Path("./experimental-pretrain-1b/dataset_1b.parquet"),
+            Path(os.path.abspath("experimental-pretrain-1b/dataset_1b.parquet")),
             Path(f"{dataset_name}/dataset_1b.parquet") if "/" not in dataset_name else None,
             Path(cache_dir) / "dataset_1b.parquet" if cache_dir else None,
+            Path("/workspace/yxanul_0.6B/experimental-pretrain-1b/dataset_1b.parquet"),  # Absolute path for container
         ]
         
         dataset_loaded = False
+        print(f"Looking for local dataset file...")
         for local_path in local_paths:
             if local_path and local_path.exists():
-                print(f"Found local dataset file: {local_path}")
-                self.dataset = load_dataset(
+                print(f"✓ Found local dataset file: {local_path}")
+                print(f"  Loading from local parquet file...")
+                # For local parquet files, handle split differently
+                ds = load_dataset(
                     "parquet",
-                    data_files=str(local_path),
-                    split=split,
+                    data_files=str(local_path.absolute()),  # Use absolute path
                     num_proc=num_proc
                 )
+                # Handle split selection for local files
+                if "train" in ds:
+                    if "[:100]" in split:  # Handle small test splits
+                        self.dataset = ds["train"].select(range(100))
+                    elif "[:" in split and "%]" in split:  # Handle percentage splits
+                        # Parse percentage like "train[:95%]"
+                        import re
+                        match = re.search(r'\[:(\d+)%\]', split)
+                        if match:
+                            pct = int(match.group(1))
+                            total = len(ds["train"])
+                            end_idx = int(total * pct / 100)
+                            self.dataset = ds["train"].select(range(end_idx))
+                        else:
+                            self.dataset = ds["train"]
+                    else:
+                        self.dataset = ds["train"]
+                else:
+                    self.dataset = ds
                 dataset_loaded = True
                 break
+            elif local_path:
+                print(f"  Checked: {local_path} - not found")
         
         # If not found locally, try loading from HuggingFace
         if not dataset_loaded:
+            print(f"Local dataset not found, attempting to load from HuggingFace: {dataset_name}")
             self.dataset = load_dataset(
                 dataset_name,
                 split=split,
