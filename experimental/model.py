@@ -85,6 +85,7 @@ class Attention(nn.Module):
         self.o_proj = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
         
         self.dropout = nn.Dropout(config.dropout)
+        self.dropout_p = config.dropout  # Store dropout probability
         self.scale = 1.0 / math.sqrt(config.head_dim)
     
     def forward(self, x, rope_cache):
@@ -114,7 +115,7 @@ class Attention(nn.Module):
         y = F.scaled_dot_product_attention(
             q, k, v,
             attn_mask=None,
-            dropout_p=0.0 if not self.training else config.dropout,
+            dropout_p=0.0 if not self.training else self.dropout_p,
             is_causal=True
         )
         
