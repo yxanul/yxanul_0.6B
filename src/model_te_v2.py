@@ -24,6 +24,7 @@ import math
 try:
     import transformer_engine as te
     import transformer_engine.pytorch as te_pytorch
+    from transformer_engine.pytorch.attention import RotaryPositionEmbedding
     from transformer_engine.common.recipe import DelayedScaling, Format
     TE_AVAILABLE = True
     print(f"TransformerEngine v{te.__version__} loaded successfully")
@@ -139,6 +140,12 @@ class YxanulTEv2Model(nn.Module):
         
         # Build transformer layers using TE v2.4 TransformerLayer
         self.layers = nn.ModuleList()
+        
+        # Precompute RoPE frequencies once for all layers (TE v2.4 way)
+        self.rope = RotaryPositionEmbedding(config.head_dim)
+        # Generate frequencies for max sequence length
+        self.freqs_cis = self.rope(config.max_position_embeddings)
+        
         for layer_idx in range(config.num_hidden_layers):
             layer = te_pytorch.TransformerLayer(
                 # Core dimensions
@@ -168,10 +175,9 @@ class YxanulTEv2Model(nn.Module):
                 fuse_qkv_params=config.fuse_qkv_params,  # Fused QKV
                 params_dtype=config.params_dtype,
                 
-                # Position encoding (RoPE handled internally)
+                # Position encoding - RoPE is handled separately in TE v2.4
                 seq_length=config.max_position_embeddings,
-                apply_rotary_pos_emb=True,
-                rotary_percent=1.0,
+                # Note: apply_rotary_pos_emb and rotary_percent removed for TE v2.4
                 
                 # Parallelism (single GPU for now)
                 tp_size=1,
@@ -278,6 +284,9 @@ class YxanulTEv2Model(nn.Module):
         # Token embeddings
         hidden_states = self.embed_tokens(input_ids)
         
+        # Slice RoPE cache to current sequence length and move to device
+        freqs_cis = self.freqs_cis[:seq_len].to(hidden_states.device, non_blocking=True)
+        
         # Convert HuggingFace-style attention mask to TE format
         # HF: 1 = keep, 0 = mask out
         # TE: True = mask out, False = keep, shape [B, 1, 1, S]
@@ -292,7 +301,8 @@ class YxanulTEv2Model(nn.Module):
         for layer in self.layers:
             hidden_states = layer(
                 hidden_states,
-                attention_mask=te_attention_mask
+                attention_mask=te_attention_mask,
+                rotary_pos_emb=freqs_cis  # Pass RoPE frequencies (TE v2.4 API)
             )
         
         # Final normalization
