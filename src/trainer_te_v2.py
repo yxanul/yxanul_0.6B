@@ -52,6 +52,7 @@ class TEv2Trainer(EnhancedTrainer):
         local_rank: int = -1,
         use_fp8: bool = True,
         fp8_format: str = "hybrid",  # "hybrid", "e4m3", or "mxfp8"
+        fp8_recipe=None,  # Optionally pass pre-created recipe
         calibration_steps: int = 10,  # Steps to calibrate FP8 scaling
         **kwargs
     ):
@@ -72,10 +73,16 @@ class TEv2Trainer(EnhancedTrainer):
             print("Falling back to hybrid format for H100/RTX 4090.")
             self.fp8_format = "hybrid"
         
-        # Create FP8 recipe based on format choice
+        # Use provided recipe or create one based on format choice
         if self.use_fp8:
-            self.fp8_recipe = self._create_fp8_recipe(fp8_format)
-            print(f"FP8 Training enabled with {fp8_format} format")
+            if fp8_recipe is not None:
+                # Use the provided recipe (ensures consistency with model init)
+                self.fp8_recipe = fp8_recipe
+                print(f"FP8 Training enabled with provided recipe ({fp8_format} format)")
+            else:
+                # Create new recipe if not provided
+                self.fp8_recipe = self._create_fp8_recipe(fp8_format)
+                print(f"FP8 Training enabled with {fp8_format} format")
             
             # Adjust optimizer for FP8 (often benefits from higher LR)
             self._adjust_optimizer_for_fp8()

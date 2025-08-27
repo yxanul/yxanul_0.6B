@@ -32,6 +32,7 @@ from model_te_v2 import create_te_v2_model, ModelConfig
 from trainer_te_v2 import TEv2Trainer
 from data_pipeline import create_dataloader, create_tokenizer, create_curriculum_dataloader
 from checkpoint_manager import CheckpointManager
+from transformer_engine.common.recipe import DelayedScaling, Format
 
 # Check for TransformerEngine
 try:
@@ -210,9 +211,30 @@ def main():
     # Load configuration
     model_config = load_config(args)
     
-    # Create model
+    # Create FP8 recipe that will be used consistently
+    fp8_recipe = None
+    if model_config.use_fp8:
+        # Create the recipe based on format choice
+        if args.fp8_format == "e4m3":
+            fp8_recipe = DelayedScaling(
+                fp8_format=Format.E4M3,
+                amax_history_len=16,
+                amax_compute_algo="max",
+                reduce_amax=True
+            )
+        else:  # hybrid (default)
+            fp8_recipe = DelayedScaling(
+                fp8_format=Format.HYBRID,  # E4M3 forward, E5M2 backward
+                amax_history_len=16,
+                amax_compute_algo="max",
+                reduce_amax=True,
+                fp8_dpa=True  # FP8 attention if supported
+            )
+        print(f"Created FP8 recipe: {args.fp8_format} format")
+    
+    # Create model with the same recipe
     print("\nCreating TE v2.4 model...")
-    model = create_te_v2_model(model_config)
+    model = create_te_v2_model(model_config, fp8_recipe=fp8_recipe)
     
     # Create tokenizer
     print("Loading tokenizer...")
@@ -280,12 +302,13 @@ def main():
         print(f"Train samples: {len(train_dataset):,}")
         print(f"Val samples: {len(val_dataset):,}")
     
-    # Create trainer
+    # Create trainer with the same FP8 recipe
     print("\nInitializing TE v2.4 Trainer...")
     trainer = TEv2Trainer(
         model=model,
         use_fp8=not args.no_fp8,
         fp8_format=args.fp8_format,
+        fp8_recipe=fp8_recipe,  # Pass the same recipe
         calibration_steps=args.calibration_steps,
         local_rank=args.local_rank
     )
