@@ -125,11 +125,12 @@ def load_config(args):
     if args.model_size == '197M':
         config = ModelConfig(
             vocab_size=200005,
-            hidden_size=768,
-            intermediate_size=2048,
-            num_hidden_layers=28,
-            num_attention_heads=12,
+            hidden_size=512,  # Corrected for actual 197M
+            intermediate_size=1366,  # ~2.67x
+            num_hidden_layers=24,
+            num_attention_heads=8,
             num_kv_heads=2,
+            head_dim=64,
             use_fp8=not args.no_fp8,
             use_factorized_embedding=True,
             factorization_dim=128
@@ -137,11 +138,12 @@ def load_config(args):
     else:  # 270M
         config = ModelConfig(
             vocab_size=200005,
-            hidden_size=896,
-            intermediate_size=2400,
-            num_hidden_layers=32,
-            num_attention_heads=14,
-            num_kv_heads=2,
+            hidden_size=640,  # Corrected for actual 270M (275M)
+            intermediate_size=1708,  # ~2.67x
+            num_hidden_layers=28,  # Reduced from 32
+            num_attention_heads=10,  # 10*64 = 640
+            num_kv_heads=3,  # GQA ~3:1 ratio
+            head_dim=64,
             use_fp8=not args.no_fp8,
             use_factorized_embedding=True,
             factorization_dim=128

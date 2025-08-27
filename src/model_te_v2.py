@@ -142,10 +142,10 @@ class YxanulTEv2Model(nn.Module):
         # Build transformer layers using TE v2.4 TransformerLayer
         self.layers = nn.ModuleList()
         
-        # Precompute RoPE frequencies once for all layers (TE v2.4 way)
+        # Initialize RoPE (TE v2.4 way) - will generate frequencies dynamically
         self.rope = RotaryPositionEmbedding(config.head_dim)
-        # Generate frequencies for max sequence length
-        self.freqs_cis = self.rope(config.max_position_embeddings)
+        self.max_seq_len_cached = 0
+        self.freqs_cis = None
         
         for layer_idx in range(config.num_hidden_layers):
             layer = te_pytorch.TransformerLayer(
@@ -286,8 +286,17 @@ class YxanulTEv2Model(nn.Module):
         # Token embeddings
         hidden_states = self.embed_tokens(input_ids)
         
-        # Slice RoPE cache to current sequence length and move to device
-        freqs_cis = self.freqs_cis[:seq_len].to(hidden_states.device, non_blocking=True)
+        # Generate or retrieve RoPE frequencies for current sequence length
+        if self.freqs_cis is None or seq_len > self.max_seq_len_cached:
+            # Generate frequencies for at least this sequence length
+            # Round up to nearest 256 for efficiency
+            cache_len = ((seq_len + 255) // 256) * 256
+            cache_len = min(cache_len, self.config.max_position_embeddings)
+            self.freqs_cis = self.rope(cache_len).to(hidden_states.device)
+            self.max_seq_len_cached = cache_len
+        
+        # Slice to actual sequence length
+        freqs_cis = self.freqs_cis[:seq_len]
         
         # Convert HuggingFace-style attention mask to TE format
         # HF: 1 = keep, 0 = mask out
