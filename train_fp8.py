@@ -13,6 +13,7 @@ from pathlib import Path
 # Disable WandB's automatic torch hooks before importing torch
 os.environ["WANDB_DISABLE_SERVICE"] = "true"
 os.environ["WANDB_REQUIRE_SERVICE"] = "false"
+os.environ["WANDB_WATCH_DISABLED"] = "true"  # Disable model watching that conflicts with torch.compile
 
 # Enable memory optimization for better CUDA allocation
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
@@ -20,6 +21,16 @@ os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 import torch
 import torch._dynamo
 torch._dynamo.config.suppress_errors = True
+
+# Completely disable WandB's automatic PyTorch integration
+try:
+    import wandb
+    # Disable all automatic hooks
+    wandb.errors.term._silent = True  # Silence wandb warnings
+except ImportError:
+    pass  # WandB not installed
+os.environ["WANDB_SILENT"] = "true"
+
 import yaml
 import argparse
 from dataclasses import fields, asdict

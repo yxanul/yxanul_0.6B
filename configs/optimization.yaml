@@ -26,7 +26,7 @@ flash_attention:
 
 # PyTorch 2.0 Compile
 torch_compile:
-  enabled: true
+  enabled: false  # DISABLED: Incompatible with FP8 models and causes WandB hook conflicts
   backend: "inductor"      # Best for NVIDIA GPUs
   mode: "max-autotune"     # Maximum optimization
   fullgraph: true          # Compile entire model
