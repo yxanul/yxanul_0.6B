@@ -338,7 +338,7 @@ def create_te_v2_model(config: ModelConfig, fp8_recipe=None) -> YxanulTEv2Model:
     """
     Create and initialize a Yxanul TE v2.4 model.
     
-    Uses fp8_model_init context for proper FP8 initialization.
+    Uses fp8_model_init function for proper FP8 initialization.
     
     Args:
         config: Model configuration
@@ -347,7 +347,10 @@ def create_te_v2_model(config: ModelConfig, fp8_recipe=None) -> YxanulTEv2Model:
     if not TE_AVAILABLE:
         raise RuntimeError("TransformerEngine is required. Please use NGC container.")
     
-    # Initialize with FP8 context if enabled
+    # Create the model
+    model = YxanulTEv2Model(config)
+    
+    # Initialize for FP8 if enabled
     if config.use_fp8:
         # Default to HYBRID format for H100/RTX 4090 compatibility
         if fp8_recipe is None:
@@ -360,10 +363,8 @@ def create_te_v2_model(config: ModelConfig, fp8_recipe=None) -> YxanulTEv2Model:
                 fp8_dpa=True  # FP8 attention if supported
             )
         
-        with te_pytorch.fp8_model_init(enabled=True, fp8_recipe=fp8_recipe):
-            model = YxanulTEv2Model(config)
-    else:
-        model = YxanulTEv2Model(config)
+        # Initialize model for FP8 (modifies model in-place)
+        te_pytorch.fp8_model_init(model, fp8_recipe)
     
     # Move to GPU if available
     if torch.cuda.is_available():
@@ -379,16 +380,18 @@ if __name__ == "__main__":
     # Create config
     config = ModelConfig()
     
-    # Create FP8 recipe for consistency
-    from transformer_engine.common.recipe import DelayedScaling, Format
-    fp8_recipe = DelayedScaling(
-        fp8_format=Format.HYBRID,
-        amax_history_len=16,
-        amax_compute_algo="max",
-        reduce_amax=True
-    ) if config.use_fp8 else None
+    # Create FP8 recipe for consistency if FP8 is enabled
+    fp8_recipe = None
+    if config.use_fp8:
+        from transformer_engine.common.recipe import DelayedScaling, Format
+        fp8_recipe = DelayedScaling(
+            fp8_format=Format.HYBRID,
+            amax_history_len=16,
+            amax_compute_algo="max",
+            reduce_amax=True
+        )
     
-    # Create model
+    # Create model (will apply FP8 initialization if enabled)
     model = create_te_v2_model(config, fp8_recipe=fp8_recipe)
     
     # Test forward pass
