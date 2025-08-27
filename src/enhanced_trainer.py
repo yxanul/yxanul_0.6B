@@ -265,6 +265,10 @@ class EnhancedTrainer(OptimizedTrainer):
         effective_tokens = tokens_processed * grad_accum_steps
         tokens_per_second = effective_tokens / step_time if step_time > 0 else 0
         
+        # Also calculate raw hardware throughput (tokens per forward pass)
+        # This shows actual GPU utilization
+        hardware_tokens_per_second = tokens_processed / forward_time if forward_time > 0 else 0
+        
         # Memory after step (GPU only)
         mem_after = 0
         max_mem_after = 0
@@ -297,6 +301,8 @@ class EnhancedTrainer(OptimizedTrainer):
             
             # Performance metrics
             "perf/tokens_per_second": tokens_per_second,
+            "perf/hardware_tokens_per_second": hardware_tokens_per_second,
+            "perf/gpu_efficiency": min(100, (hardware_tokens_per_second / 100000) * 100),  # % of peak
             "perf/samples_per_second": batch_size / step_time if step_time > 0 else 0,
             "perf/forward_time": forward_time,
             "perf/backward_time": backward_time,
