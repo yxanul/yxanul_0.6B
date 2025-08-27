@@ -356,6 +356,9 @@ class YxanulFP8Model(nn.Module):
         self.config = config
         self.fp8_config = FP8Config()
         
+        # Check Flash Attention availability
+        self._check_flash_attention()
+        
         # Embeddings (BF16, not FP8)
         self.embeddings = OptimizedFP8Embedding(
             vocab_size=config.vocab_size,
@@ -388,6 +391,31 @@ class YxanulFP8Model(nn.Module):
     def gradient_checkpointing_disable(self):
         """Disable gradient checkpointing."""
         self.gradient_checkpointing = False
+    
+    def _check_flash_attention(self):
+        """Check if Flash Attention is available and will be used."""
+        try:
+            # Check PyTorch version
+            import torch
+            torch_version = torch.__version__
+            
+            # Check if SDPA has Flash Attention backend
+            if hasattr(torch.nn.functional, 'scaled_dot_product_attention'):
+                # Try to check available backends
+                if hasattr(torch.backends.cuda, 'flash_sdp_enabled'):
+                    flash_enabled = torch.backends.cuda.flash_sdp_enabled()
+                    if flash_enabled:
+                        print(f"✓ Flash Attention 2 is ENABLED (PyTorch {torch_version})")
+                    else:
+                        print(f"⚠️ Flash Attention 2 is DISABLED (PyTorch {torch_version})")
+                        print("  Enable with: torch.backends.cuda.enable_flash_sdp(True)")
+                else:
+                    print(f"ℹ️ PyTorch {torch_version} - Flash Attention status unknown")
+                    print("  SDPA will auto-select best backend (likely using Flash if available)")
+            else:
+                print("⚠️ PyTorch version too old for scaled_dot_product_attention")
+        except Exception as e:
+            print(f"⚠️ Could not check Flash Attention: {e}")
         
     def forward(
         self,

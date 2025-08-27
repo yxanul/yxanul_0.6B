@@ -255,9 +255,11 @@ class EnhancedTrainer(OptimizedTrainer):
         else:
             tokens_processed = actual_tokens
             
-        # Get gradient accumulation steps from config (default to 1 if not set)
+        # Get gradient accumulation steps - check instance variable first (updated by curriculum)
         grad_accum_steps = 1
-        if hasattr(self, 'config') and self.config:
+        if hasattr(self, 'gradient_accumulation_steps'):
+            grad_accum_steps = self.gradient_accumulation_steps
+        elif hasattr(self, 'config') and self.config:
             grad_accum_steps = self.config.get('training', {}).get('gradient_accumulation_steps', 1)
         
         # Calculate effective tokens per second INCLUDING gradient accumulation
@@ -268,6 +270,11 @@ class EnhancedTrainer(OptimizedTrainer):
         # Also calculate raw hardware throughput (tokens per forward pass)
         # This shows actual GPU utilization
         hardware_tokens_per_second = tokens_processed / forward_time if forward_time > 0 else 0
+        
+        # Debug: Print actual values every 100 steps
+        if self.global_step % 100 == 0:
+            print(f"  [Debug] Batch:{batch_size} Seq:{seq_len} Actual_tokens:{actual_tokens} Grad_accum:{grad_accum_steps}")
+            print(f"  [Debug] Step_time:{step_time:.2f}s Forward:{forward_time:.2f}s => {tokens_per_second:.0f} tok/s")
         
         # Memory after step (GPU only)
         mem_after = 0
