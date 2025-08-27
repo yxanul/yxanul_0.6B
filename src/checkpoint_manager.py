@@ -98,11 +98,15 @@ class CheckpointManager:
             checkpoint['scaler_state_dict'] = scaler.state_dict()
         
         if fp8_recipe is not None:
+            # Handle DelayedScaling recipe from TransformerEngine
             checkpoint['fp8_recipe'] = {
-                'margin': fp8_recipe.margin,
-                'format': fp8_recipe.format.value if hasattr(fp8_recipe.format, 'value') else fp8_recipe.format,
-                'amax_history_len': fp8_recipe.amax_history_len,
-                'amax_compute_algo': fp8_recipe.amax_compute_algo,
+                'margin': fp8_recipe.margin if hasattr(fp8_recipe, 'margin') else 0,
+                'fp8_format': str(fp8_recipe.fp8_format) if hasattr(fp8_recipe, 'fp8_format') else 'HYBRID',
+                'amax_history_len': fp8_recipe.amax_history_len if hasattr(fp8_recipe, 'amax_history_len') else 16,
+                'amax_compute_algo': fp8_recipe.amax_compute_algo if hasattr(fp8_recipe, 'amax_compute_algo') else 'max',
+                'reduce_amax': fp8_recipe.reduce_amax if hasattr(fp8_recipe, 'reduce_amax') else True,
+                'fp8_dpa': fp8_recipe.fp8_dpa if hasattr(fp8_recipe, 'fp8_dpa') else False,
+                'fp8_mha': fp8_recipe.fp8_mha if hasattr(fp8_recipe, 'fp8_mha') else False,
             }
         
         # Add any extra state

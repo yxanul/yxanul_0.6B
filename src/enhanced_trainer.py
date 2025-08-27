@@ -492,9 +492,12 @@ class EnhancedTrainer(OptimizedTrainer):
             print("="*60)
             
             # Create validator
+            # For large vocab models, use much smaller batch size
+            vocab_size = len(self.tokenizer) if hasattr(self.tokenizer, '__len__') else 200005
+            default_batch = 2 if vocab_size > 100000 else 32
             validator = MultiDomainValidator(
                 tokenizer=self.tokenizer,
-                batch_size=self.config.get('validation', {}).get('per_device_eval_batch_size', 32),
+                batch_size=self.config.get('validation', {}).get('per_device_eval_batch_size', default_batch),
                 max_samples_per_domain=1000
             )
             

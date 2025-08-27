@@ -111,7 +111,14 @@ class MultiDomainValidator:
     
     def __init__(self, tokenizer, batch_size: int = 32, max_samples_per_domain: int = 1000):
         self.tokenizer = tokenizer
-        self.batch_size = batch_size
+        # With 200k vocab, batch size must be tiny to avoid OOM
+        # Calculate safe batch size based on vocab size
+        vocab_size = len(tokenizer) if hasattr(tokenizer, '__len__') else 200005
+        if vocab_size > 100000:  # Large vocab (200k)
+            self.batch_size = min(batch_size, 2)  # Max 2 for safety
+            print(f"Large vocab ({vocab_size}): limiting validation batch_size to {self.batch_size}")
+        else:
+            self.batch_size = batch_size
         self.max_samples = max_samples_per_domain
         
         # Create domain-specific datasets
@@ -129,14 +136,17 @@ class MultiDomainValidator:
                 self.datasets[domain] = dataset
                 
                 # Create dataloader with proper batch size
-                # Ensure batch size is multiple of 8 for FP8
-                batch_size = (batch_size // 8) * 8
-                if batch_size == 0:
-                    batch_size = 8
+                # For large vocab, use tiny batch size to avoid OOM
+                actual_batch_size = self.batch_size
+                # Only enforce multiple of 8 if batch_size >= 8
+                if actual_batch_size >= 8:
+                    actual_batch_size = (actual_batch_size // 8) * 8
+                if actual_batch_size == 0:
+                    actual_batch_size = 1  # Minimum batch size of 1
                     
                 self.dataloaders[domain] = DataLoader(
                     dataset,
-                    batch_size=batch_size,
+                    batch_size=actual_batch_size,
                     shuffle=False,
                     num_workers=0,
                     pin_memory=True,
