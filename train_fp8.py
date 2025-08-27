@@ -145,14 +145,21 @@ def main():
     with open(args.config, 'r') as f:
         training_config = yaml.safe_load(f)
     
-    with open(args.model_config, 'r') as f:
-        model_config = yaml.safe_load(f)
+    # IGNORE model config from YAML - use hardcoded 270M config
+    # This ensures we always get the correct model size
+    from model_fp8_optimized import ModelConfig
+    model_config_obj = ModelConfig()  # This has the correct 270M settings
+    model_config_obj.use_fp8 = not args.disable_fp8
     
-    with open(args.optimization_config, 'r') as f:
-        optimization_config = yaml.safe_load(f)
+    # Convert to dict for compatibility
+    model_config = {'model': asdict(model_config_obj)}
     
-    # Enable FP8 in model config
-    model_config['model']['use_fp8'] = not args.disable_fp8
+    # Load optimization config (this is fine to keep)
+    if Path(args.optimization_config).exists():
+        with open(args.optimization_config, 'r') as f:
+            optimization_config = yaml.safe_load(f)
+    else:
+        optimization_config = {}
     
     # Combine configs
     full_config = {
@@ -169,7 +176,7 @@ def main():
     
     if rank == 0:
         print("=" * 60)
-        print("Yxanul 177M Training with FP8 Optimization")
+        print("Yxanul 270M Training with FP8 Optimization")
         print("=" * 60)
         print(f"Config: {args.config}")
         print(f"Device: {device}")
@@ -185,14 +192,12 @@ def main():
         # Find the maximum seq_len across all curriculum stages
         max_seq_len = max(stage.get('seq_len', max_seq_len) for stage in curriculum_mgr.stages)
     
-    # Create FP8-optimized model
-    valid_fields = {f.name for f in fields(ModelConfig)}
-    filtered_model_config = {k: v for k, v in model_config["model"].items() if k in valid_fields}
-    model = create_fp8_model(filtered_model_config)
+    # Create FP8-optimized model - use the config object directly
+    model = create_fp8_model(model_config_obj)  # Pass the ModelConfig object
     model = model.to(device)
     
     # Verify curriculum doesn't exceed model's positional embedding capacity
-    model_max_pos = filtered_model_config.get('max_position_embeddings', 4096)
+    model_max_pos = model_config_obj.max_position_embeddings
     if use_curriculum and curriculum_mgr.stages:
         for i, stage in enumerate(curriculum_mgr.stages):
             stage_seq_len = stage.get('seq_len', 0)
@@ -214,8 +219,9 @@ def main():
         print("=" * 60)
     
     # Create tokenizer - Using SuperBPE for 31% token reduction!
-    tokenizer = create_tokenizer(max_length=max_seq_len)  # Defaults to SuperBPE t=80k
-    print(f"Tokenizer max_length set to: {max_seq_len}")
+    tokenizer = create_tokenizer(use_superbpe=True)  # Use SuperBPE t=80k
+    tokenizer.model_max_length = max_seq_len  # Set max length after creation
+    print(f"Tokenizer: SuperBPE with max_length={max_seq_len}")
     
     # Get initial batch size (from config or first curriculum stage)
     if use_curriculum and curriculum_mgr.stages:
