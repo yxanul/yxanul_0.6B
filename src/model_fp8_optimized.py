@@ -442,16 +442,30 @@ class YxanulFP8Model(nn.Module):
         
         loss = None
         if labels is not None:
-            # Loss computation in FP32 for stability
+            # Loss computation - optimize memory for large vocab
             # No shifting needed - dataloader already provides aligned labels
+            
+            # Reshape first to avoid creating huge intermediate tensors
+            batch_size, seq_len, vocab_size = logits.shape
+            
+            # Use mixed precision loss computation to save memory
+            # CrossEntropyLoss internally converts to FP32 as needed
             loss_fct = nn.CrossEntropyLoss()
             
-            # Cast to FP32 for loss (critical for numerical stability)
-            logits_for_loss = logits.float()
-            loss = loss_fct(
-                logits_for_loss.view(-1, logits_for_loss.size(-1)),
-                labels.view(-1)
-            )
+            # For validation with large vocab, keep in BF16 as long as possible
+            if not self.training and vocab_size > 50000:
+                # During validation, compute loss directly in BF16 to save memory
+                loss = loss_fct(
+                    logits.view(-1, vocab_size),
+                    labels.view(-1)
+                )
+            else:
+                # During training, use FP32 for better gradient precision
+                logits_for_loss = logits.float()
+                loss = loss_fct(
+                    logits_for_loss.view(-1, vocab_size),
+                    labels.view(-1)
+                )
         
         return loss, logits  # Return (loss, logits) to match trainer expectations
 

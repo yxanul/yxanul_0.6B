@@ -96,7 +96,7 @@ training:
   
 validation:
   validation_split: 0.05  # ~200M tokens for validation
-  per_device_eval_batch_size: 32
+  per_device_eval_batch_size: 1  # MUST be 1 with 200k vocab to avoid OOM
   
 dataset_advantages:
   quality_metrics:
