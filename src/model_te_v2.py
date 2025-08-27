@@ -302,14 +302,12 @@ class YxanulTEv2Model(nn.Module):
         # TE handles causal masking internally when self_attn_mask_type='causal'
         for layer in self.layers:
             if self.gradient_checkpointing and self.training:
-                # Use gradient checkpointing to save memory
-                import torch.utils.checkpoint
-                hidden_states = torch.utils.checkpoint.checkpoint(
-                    layer,
+                # TransformerEngine layers don't work well with standard gradient checkpointing
+                # Just run normally - TE has its own memory optimizations
+                hidden_states = layer(
                     hidden_states,
-                    te_attention_mask,
-                    freqs_cis,
-                    use_reentrant=False
+                    attention_mask=te_attention_mask,
+                    rotary_pos_emb=freqs_cis  # Pass RoPE frequencies (TE v2.4 API)
                 )
             else:
                 hidden_states = layer(
@@ -347,7 +345,7 @@ class YxanulTEv2Model(nn.Module):
         return (loss, logits) if loss is not None else logits
 
 
-def create_te_v2_model(config: ModelConfig, fp8_recipe=None, enable_gradient_checkpointing=True) -> YxanulTEv2Model:
+def create_te_v2_model(config: ModelConfig, fp8_recipe=None, enable_gradient_checkpointing=False) -> YxanulTEv2Model:
     """
     Create and initialize a Yxanul TE v2.4 model.
     
@@ -365,10 +363,12 @@ def create_te_v2_model(config: ModelConfig, fp8_recipe=None, enable_gradient_che
     # Create the model
     model = YxanulTEv2Model(config)
     
-    # Enable gradient checkpointing to save memory
+    # Gradient checkpointing disabled - doesn't work well with TE layers
     if enable_gradient_checkpointing:
-        model.gradient_checkpointing = True
-        print("✓ Gradient checkpointing ENABLED - trading compute for memory")
+        print("WARNING: Gradient checkpointing not compatible with TE layers - disabled")
+        model.gradient_checkpointing = False
+    else:
+        model.gradient_checkpointing = False
     
     # Move to GPU if available
     if torch.cuda.is_available():
