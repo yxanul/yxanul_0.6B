@@ -122,72 +122,50 @@ class PretrainDataset(Dataset):
         print(f"Dataset loaded: {len(self.dataset)} examples")
         if hasattr(self.dataset, 'features'):
             print(f"Dataset features: {list(self.dataset.features.keys())}")
-        
-        # Pre-tokenize and create chunks
-        self._prepare_chunks()
-    
-    def _prepare_chunks(self):
-        """Pre-tokenize all texts and create fixed-length chunks (no overlap)."""
-        print("Pre-tokenizing dataset and creating non-overlapping chunks...")
-        self.chunks = []
-        buffer = []
-        
-        # Process in batches for efficiency
-        batch_size = 1000
-        total_docs = len(self.dataset)
-        
-        for idx in range(0, total_docs, batch_size):
-            batch_end = min(idx + batch_size, total_docs)
-            batch = self.dataset[idx:batch_end]
             
-            # Process each document in batch
-            texts = batch['text'] if isinstance(batch['text'], list) else [batch['text']]
-            
-            for text in texts:
-                if not text or len(text) < 100:  # Skip very short texts
-                    continue
-                
-                # Tokenize
-                tokens = self.tokenizer.encode(
-                    text,
-                    truncation=False,
-                    add_special_tokens=True
-                )
-                
-                # Add to buffer with EOS token
-                buffer.extend(tokens)
-                if self.add_eos_between_docs and self.tokenizer.eos_token_id is not None:
-                    buffer.append(self.tokenizer.eos_token_id)
-                
-                # Create non-overlapping chunks from buffer
-                while len(buffer) >= self.max_length:
-                    chunk = buffer[:self.max_length]
-                    buffer = buffer[self.max_length:]  # No overlap - move by full length
-                    
-                    # Create input_ids and labels
-                    input_ids = torch.tensor(chunk, dtype=torch.long)
-                    labels = input_ids.clone()
-                    labels[0] = -100  # Mask first position
-                    
-                    self.chunks.append({
-                        'input_ids': input_ids,
-                        'labels': labels,
-                        'attention_mask': torch.ones(self.max_length, dtype=torch.long)
-                    })
-            
-            # Progress update
-            if (idx + batch_size) % 10000 == 0:
-                print(f"  Processed {min(idx + batch_size, total_docs)}/{total_docs} documents, "
-                      f"created {len(self.chunks)} chunks")
-        
-        print(f"Preprocessing complete: {len(self.chunks)} chunks created from {total_docs} documents")
-        print(f"Tokens per chunk: {self.max_length} (no overlap for maximum efficiency)")
+            # Show statistics for experimental-pretrain-1b dataset
+            if 'num_tokens' in self.dataset.features:
+                total_tokens = sum(self.dataset['num_tokens'])
+                print(f"Total pre-computed tokens: {total_tokens:,}")
+                avg_tokens = total_tokens / len(self.dataset)
+                print(f"Average tokens per document: {avg_tokens:.1f}")
     
     def __len__(self):
-        return len(self.chunks)
+        # Return number of documents (not chunks since we tokenize on-the-fly)
+        return len(self.dataset)
     
     def __getitem__(self, idx):
-        return self.chunks[idx]
+        """Get a single example and tokenize on-the-fly (no pre-tokenization!)"""
+        example = self.dataset[idx]
+        
+        # Get the text
+        text = example['text']
+        
+        # Tokenize on-the-fly with truncation and padding
+        encoding = self.tokenizer(
+            text,
+            truncation=True,
+            padding='max_length',
+            max_length=self.max_length,
+            return_tensors='pt'
+        )
+        
+        # Get tensors and remove batch dimension
+        input_ids = encoding['input_ids'].squeeze(0)
+        attention_mask = encoding['attention_mask'].squeeze(0)
+        
+        # Create labels (same as input_ids but with padding positions as -100)
+        labels = input_ids.clone()
+        labels[labels == self.tokenizer.pad_token_id] = -100
+        
+        return {
+            'input_ids': input_ids,
+            'labels': labels,
+            'attention_mask': attention_mask,
+            # Include metadata for analysis (optional)
+            'source': example.get('source', 'unknown'),
+            'original_tokens': example.get('num_tokens', 0)
+        }
 
 
 class StreamingDataset(IterableDataset):
@@ -611,7 +589,7 @@ class DataCollator:
 
 def fp8_collate_fn(batch):
     """Simple collate function - no padding needed if batch sizes are multiples of 8."""
-    # Stack the batch normally
+    # Stack the batch normally, ignoring metadata fields
     input_ids = torch.stack([item['input_ids'] for item in batch])
     labels = torch.stack([item['labels'] for item in batch])
     attention_mask = torch.stack([item['attention_mask'] for item in batch])
@@ -620,6 +598,7 @@ def fp8_collate_fn(batch):
         'input_ids': input_ids,
         'labels': labels,
         'attention_mask': attention_mask
+        # Don't include source/original_tokens in training batch
     }
 
 def create_dataloader(
