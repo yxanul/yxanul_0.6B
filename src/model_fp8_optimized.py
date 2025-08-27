@@ -442,29 +442,30 @@ class YxanulFP8Model(nn.Module):
         
         loss = None
         if labels is not None:
-            # Loss computation - optimize memory for large vocab
-            # No shifting needed - dataloader already provides aligned labels
+            # CRITICAL FIX: Shift for proper next-token prediction!
+            # We need to predict token at position t+1 from tokens up to position t
+            shift_logits = logits[:, :-1, :].contiguous()  # Remove last prediction
+            shift_labels = labels[:, 1:].contiguous()      # Remove first label
             
-            # Reshape first to avoid creating huge intermediate tensors
-            batch_size, seq_len, vocab_size = logits.shape
+            batch_size, seq_len, vocab_size = shift_logits.shape
             
             # Use mixed precision loss computation to save memory
-            # CrossEntropyLoss internally converts to FP32 as needed
-            loss_fct = nn.CrossEntropyLoss()
+            # CrossEntropyLoss with ignore_index for padding tokens
+            loss_fct = nn.CrossEntropyLoss(ignore_index=-100)
             
             # For validation with large vocab, keep in BF16 as long as possible
             if not self.training and vocab_size > 50000:
                 # During validation, compute loss directly in BF16 to save memory
                 loss = loss_fct(
-                    logits.view(-1, vocab_size),
-                    labels.view(-1)
+                    shift_logits.view(-1, vocab_size),
+                    shift_labels.view(-1)
                 )
             else:
                 # During training, use FP32 for better gradient precision
-                logits_for_loss = logits.float()
+                shift_logits_fp32 = shift_logits.float()
                 loss = loss_fct(
-                    logits_for_loss.view(-1, vocab_size),
-                    labels.view(-1)
+                    shift_logits_fp32.view(-1, vocab_size),
+                    shift_labels.view(-1)
                 )
         
         return loss, logits  # Return (loss, logits) to match trainer expectations

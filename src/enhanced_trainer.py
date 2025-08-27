@@ -236,8 +236,14 @@ class EnhancedTrainer(OptimizedTrainer):
         # Post-step metrics
         step_time = time.time() - start_time
         
-        # Token counting - Fixed calculation
-        if hasattr(self.tokenizer, 'pad_token_id'):
+        # Token counting - Use attention mask for accurate count
+        # This properly handles EOS tokens that might be same as pad_token
+        if attention_mask is not None:
+            actual_tokens = attention_mask.sum().item()
+        elif labels is not None:
+            # Count non-ignored labels (-100 is ignore index)
+            actual_tokens = (labels != -100).sum().item()
+        elif hasattr(self.tokenizer, 'pad_token_id'):
             actual_tokens = (input_ids != self.tokenizer.pad_token_id).sum().item()
         else:
             actual_tokens = batch_size * seq_len
