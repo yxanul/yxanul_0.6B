@@ -39,7 +39,7 @@ class ModelConfig:
     # Model dimensions - 270M configuration
     vocab_size: int = 200005  # SuperBPE tokenizer
     hidden_size: int = 640  # THIS IS THE ONLY PLACE TO SET THIS
-    intermediate_size: int = 1708  # ~2.67x hidden for SwiGLU
+    intermediate_size: int = 1712  # Must be divisible by 16 for FP8! (was 1708)
     num_hidden_layers: int = 28  # 28 layers for 270M model
     
     # Attention configuration
