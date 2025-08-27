@@ -23,9 +23,9 @@ training:
   weight_decay: 0.1
   use_curriculum: false  # DISABLE curriculum to avoid dataloader recreation
   
-  # Fixed batch size - no curriculum changes
-  per_device_train_batch_size: 4
-  gradient_accumulation_steps: 16  # Effective batch = 64
+  # Fixed batch size - conservative for 200k vocab
+  per_device_train_batch_size: 1  # Must be 1 for 200k vocab!
+  gradient_accumulation_steps: 64  # Effective batch = 64
   gradient_checkpointing: true
   mixed_precision: "bf16"
   tf32: true
@@ -71,7 +71,12 @@ optimization:
 
 # Hardware optimizations
 cuda_amp: true
-dataloader_pin_memory: true
+dataloader_pin_memory: false  # Save memory
 dataloader_num_workers: 0  # CRITICAL: Set to 0 to avoid multiprocessing issues
-dataloader_prefetch_factor: 2  # Prefetch batches
+dataloader_prefetch_factor: null  # Disable prefetch to save memory
 dataloader_persistent_workers: false
+
+# Memory optimizations for 200k vocab
+gradient_checkpointing: true  # Essential for large vocab
+empty_cache_steps: 100  # Clear cache periodically
+max_split_size_mb: 512  # Prevent fragmentation
