@@ -27,39 +27,39 @@ training:
   num_epochs: 1
   max_steps: 150000  # More steps for larger dataset
   
-  # Base configuration
-  per_device_train_batch_size: 32
-  gradient_accumulation_steps: 1
+  # Base configuration - REDUCED for 32GB VRAM
+  per_device_train_batch_size: 1  # Start small
+  gradient_accumulation_steps: 32  # Effective batch = 32
   
-  # Learning rate (FP8 + high-quality data = higher LR)
-  learning_rate: 1e-3      # Higher for educational content
-  min_learning_rate: 1e-4
+  # Learning rate (FP8 + high-quality data = moderate LR)
+  learning_rate: 2e-4      # Reduced for stability with 270M model
+  min_learning_rate: 1e-5
   lr_scheduler_type: "cosine"
   warmup_steps: 500
   
-  # FP8-Optimized Curriculum for Educational Content
+  # FP8-Optimized Curriculum for Educational Content - ADJUSTED for RTX 5090 (32GB)
   # Educational text benefits from longer initial sequences
   use_curriculum: true
   curriculum_stages:
-    # Phase 1: Word & phrase learning (faster with quality content)
-    - {step: 0,     seq_len: 128,  batch_size: 256, lr_scale: 12.0, warmup: 500, grad_clip: 5.0}  # 32,768 tokens
-    - {step: 3000,  seq_len: 256,  batch_size: 128, lr_scale: 8.0,  warmup: 300, grad_clip: 2.0}  # 32,768 tokens
+    # Phase 1: Word & phrase learning (with gradient accumulation for effective batch)
+    - {step: 0,     seq_len: 128,  batch_size: 8,  lr_scale: 2.0, warmup: 500, grad_clip: 1.0}  # 1,024 tokens/batch
+    - {step: 3000,  seq_len: 256,  batch_size: 4,  lr_scale: 1.5, warmup: 300, grad_clip: 0.8}  # 1,024 tokens/batch
     
     # Phase 2: Sentence & paragraph structure
-    - {step: 6000,  seq_len: 512,  batch_size: 64,  lr_scale: 4.0,  warmup: 200, grad_clip: 1.0}  # 32,768 tokens
-    - {step: 10000, seq_len: 768,  batch_size: 42,  lr_scale: 2.5,  warmup: 100, grad_clip: 0.5}  # 32,256 tokens
+    - {step: 6000,  seq_len: 512,  batch_size: 2,  lr_scale: 1.2, warmup: 200, grad_clip: 0.5}  # 1,024 tokens/batch
+    - {step: 10000, seq_len: 768,  batch_size: 2,  lr_scale: 1.0, warmup: 100, grad_clip: 0.4}  # 1,536 tokens/batch
     
     # Phase 3: Document understanding
-    - {step: 15000, seq_len: 1024, batch_size: 32,  lr_scale: 1.5,  warmup: 100, grad_clip: 0.4}  # 32,768 tokens
-    - {step: 25000, seq_len: 1536, batch_size: 21,  lr_scale: 1.0,  warmup: 100, grad_clip: 0.3}  # 32,256 tokens
+    - {step: 15000, seq_len: 1024, batch_size: 1,  lr_scale: 0.8, warmup: 100, grad_clip: 0.3}  # 1,024 tokens/batch
+    - {step: 25000, seq_len: 1536, batch_size: 1,  lr_scale: 0.6, warmup: 100, grad_clip: 0.3}  # 1,536 tokens/batch
     
     # Phase 4: Full context mastery
-    - {step: 40000, seq_len: 2048, batch_size: 16,  lr_scale: 0.7,  warmup: 100, grad_clip: 0.3}  # 32,768 tokens
-    - {step: 60000, seq_len: 2048, batch_size: 18,  lr_scale: 0.5,  warmup: 50,  grad_clip: 0.3}  # 36,864 tokens
-    - {step: 100000, seq_len: 2048, batch_size: 20, lr_scale: 0.3,  warmup: 50,  grad_clip: 0.3}  # 40,960 tokens
+    - {step: 40000, seq_len: 2048, batch_size: 1,  lr_scale: 0.5, warmup: 100, grad_clip: 0.3}  # 2,048 tokens/batch
+    - {step: 60000, seq_len: 2048, batch_size: 1,  lr_scale: 0.3, warmup: 50,  grad_clip: 0.3}  # 2,048 tokens/batch
+    - {step: 100000, seq_len: 2048, batch_size: 1, lr_scale: 0.2,  warmup: 50,  grad_clip: 0.3}  # 2,048 tokens/batch
   
-  # Note: train_fp8.py adds +30% to these batch sizes automatically
-  # Effective: ~42-53k tokens per batch with FP8!
+  # Note: With gradient_accumulation=32, effective batch is 32x larger
+  # Memory-safe configuration for RTX 5090 (32GB VRAM)
   
   # Optimizer
   optimizer: "adamw"

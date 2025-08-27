@@ -14,6 +14,9 @@ from pathlib import Path
 os.environ["WANDB_DISABLE_SERVICE"] = "true"
 os.environ["WANDB_REQUIRE_SERVICE"] = "false"
 
+# Enable memory optimization for better CUDA allocation
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+
 import torch
 import torch._dynamo
 torch._dynamo.config.suppress_errors = True
