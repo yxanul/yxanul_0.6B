@@ -14,33 +14,72 @@ from tqdm import tqdm
 def prepare_dataset():
     """Prepare TinyStories with SuperBPE tokenizer."""
     
-    # Load SuperBPE tokenizer (t80k first as requested)
-    print("Loading SuperBPE tokenizer...")
+    # Load SuperBPE tokenizer from local cache
+    print("Loading SuperBPE tokenizer from local cache...")
+    
+    # Check if we're on RunPod (Linux) or local Windows
+    import os
+    import platform
+    
+    # Determine cache path based on platform
+    if platform.system() == "Linux":
+        # RunPod instance paths
+        cache_base = Path("/workspace/yxanul_0.6B/tokenizer_cache")
+    else:
+        # Local Windows paths
+        cache_base = Path("D:/ai_testing/yxanul_0.6B/tokenizer_cache")
+    
+    # Check if cache exists
+    if not cache_base.exists():
+        # Try relative path from experimental directory
+        cache_base = Path("../tokenizer_cache")
+        if not cache_base.exists():
+            raise FileNotFoundError(f"Tokenizer cache not found at {cache_base}")
+    
+    # Try loading from local cache
     try:
-        # Try t80k first (which we know works)
-        tokenizer = AutoTokenizer.from_pretrained(
-            "UW/OLMo2-8B-SuperBPE-t80k",
-            use_fast=True
-        )
-        print("Loaded SuperBPE-t80k successfully")
-    except:
-        try:
-            # Fallback to 180k
+        # Try t80k first (as requested)
+        t80k_path = cache_base / "superbpe-t80k-fast"
+        if t80k_path.exists():
             tokenizer = AutoTokenizer.from_pretrained(
-                "UW/OLMo2-8B-SuperBPE-180k",
-                use_fast=True
+                str(t80k_path),
+                use_fast=True,
+                local_files_only=True
             )
-            print("Loaded SuperBPE-180k successfully")
-        except Exception as e:
-            print(f"Error loading SuperBPE tokenizers: {e}")
-            raise
+            print(f"Loaded SuperBPE-t80k from {t80k_path}")
+        else:
+            # Fallback to t180k
+            t180k_path = cache_base / "superbpe-t180k-fast"
+            if t180k_path.exists():
+                tokenizer = AutoTokenizer.from_pretrained(
+                    str(t180k_path),
+                    use_fast=True,
+                    local_files_only=True
+                )
+                print(f"Loaded SuperBPE-t180k from {t180k_path}")
+            else:
+                # Try downloading if cache doesn't exist
+                print("Local cache not found, trying to download...")
+                tokenizer = AutoTokenizer.from_pretrained(
+                    "allenai/OLMo-7B-0724-hf",  # Fallback to known working tokenizer
+                    use_fast=True
+                )
+                print("Loaded fallback OLMo tokenizer")
+    except Exception as e:
+        print(f"Error loading tokenizer: {e}")
+        raise
     
     print(f"Vocabulary size: {len(tokenizer)}")
     
     # Paths - reuse existing downloaded data
-    data_dir = Path('../TinyStories-hf')  # Assuming you have this
+    data_dir = Path('data')  # Current TinyStories location in experimental/data
     if not data_dir.exists():
-        data_dir = Path('data/TinyStories')  # Alternative path
+        # Try parent directory paths
+        data_dir = Path('../data')
+        if not data_dir.exists():
+            data_dir = Path('../TinyStories-hf')
+            if not data_dir.exists():
+                raise FileNotFoundError("TinyStories dataset not found in expected locations")
     
     output_dir = Path('data_superbpe')
     output_dir.mkdir(exist_ok=True)
