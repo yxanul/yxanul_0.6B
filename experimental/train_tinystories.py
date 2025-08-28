@@ -20,7 +20,7 @@ from torch.nn import functional as F
 import tiktoken
 
 # Import our model and logger
-from model import GPTConfig, GPT
+from model import ModelConfig, GPT
 from wandb_logger import WandBLogger
 
 # -----------------------------------------------------------------------------
@@ -129,12 +129,13 @@ def train(config: TrainingConfig):
     )
     
     # Create model
-    model_config = GPTConfig(
-        block_size=config.block_size,
+    model_config = ModelConfig(
         vocab_size=config.vocab_size,
         n_layer=config.n_layer,
         n_head=config.n_head,
         n_embd=config.n_embd,
+        n_kv_heads=config.n_head // 4,  # GQA with 4x compression
+        block_size=config.block_size,
         dropout=config.dropout,
         bias=False
     )
