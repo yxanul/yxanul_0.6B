@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Repository Overview
 
-This is Yxanul 270M, a language model implementation focused on FP8 mixed precision training. The codebase implements a 270M parameter transformer model with SuperBPE tokenization (200k vocabulary), FP8 mixed precision via TransformerEngine, and curriculum learning.
+This is Yxanul 270M/0.6B, a language model implementation repository. **IMPORTANT: All active development happens in the `experimental/` directory**, which contains clean, working implementations optimized for TinyStories dataset training and various architecture experiments.
 
 ## Critical Bug Fix (December 2024)
 
@@ -28,29 +28,60 @@ Added robust CheckpointManager with:
 - Metadata preservation
 - Safe atomic saves
 
-## Core Architecture
+## Experimental Directory (Active Development)
 
-The system consists of multiple training pipelines:
+All current work is in `experimental/`:
 
-### Current Implementation (Use These)
-- **FP8 Training**: `train_fp8.py` with `src/model_fp8_optimized.py` - Mixed precision with DeepSeek V3-inspired strategy
-- **FP8 Trainer**: `src/trainer_fp8.py` - Extends EnhancedTrainer with FP8 support
-- **Model**: `src/model_fp8_optimized.py` - 270M model with GQA, RoPE, SwiGLU
-- **Curriculum Training**: Configured via `configs/fineweb_training_fp8.yaml`
+### Core Files
+- **model.py**: Clean GPT-2 architecture with GQA, RoPE, SwiGLU
+  - Supports factorized embeddings (rank=128) reducing params from 113M → 87M with GPT-2 vocab
+  - With SuperBPE 200k vocab: 381M → 125M params via factorization
+- **train_tinystories.py**: Main training script
+  - Supports both GPT-2 (50k) and SuperBPE (200k) vocabularies
+  - Factorized embeddings via `--factorized --embedding_rank 128`
+  - SuperBPE mode via `--superbpe` flag
+- **prepare_tinystories_superbpe.py**: Tokenizes TinyStories with SuperBPE
+  - Achieves 42.9% token reduction (301M → 172M tokens)
+  - 1.75x effective speedup in training
 
-### Deprecated Files (Do Not Use)
-- `src/model_te_v2.py` - TE v2.4 implementation (abandoned)
-- `src/trainer_te_v2.py` - TE v2.4 trainer (abandoned)
-- `train_te_v2.py` - TE v2.4 training script (abandoned)
+### Key Experimental Findings
+1. **SuperBPE Performance**: 200k vocabulary achieves 42.9% token reduction but is memory-bandwidth limited
+2. **Memory Bottleneck**: RTX 4090 hits 91% memory bandwidth with 200k vocab (64k tok/s vs 110k with 50k vocab)
+3. **Optimal Settings (RTX 4090, 24GB)**:
+   - SuperBPE: batch_size=32, block_size=128, grad_accum=32
+   - GPT-2: batch_size=64, block_size=128, grad_accum=16
+4. **Factorized Embeddings Essential**: For 200k vocab, reduces embedding params by 6x (154M → 26M)
 
-The data pipeline (`src/data_pipeline.py`) implements SuperBPE tokenization variants (t80k for speed, t180k for quality) that reduce token count by 37.5%.
+## Main Directory (Production - Currently Inactive)
+
+The root directory contains the production 270M model with FP8 support via TransformerEngine:
+- **FP8 Training**: `train_fp8.py` with `src/model_fp8_optimized.py`
+- **Data Pipeline**: `src/data_pipeline.py` - SuperBPE variants for FineWeb dataset
 
 ## Common Development Commands
 
-### Training Commands
+### Experimental Training (Active Development)
 
 ```bash
-# Main FP8 training script (RECOMMENDED)
+cd experimental/
+
+# Train with GPT-2 tokenizer + factorized embeddings (87M params)
+python train_tinystories.py --factorized --embedding_rank 128 --max_iters 1000
+
+# Prepare SuperBPE dataset (42.9% token reduction) 
+python prepare_tinystories_superbpe.py
+
+# Train with SuperBPE tokenizer + factorized embeddings (125M params)
+python train_tinystories.py --superbpe --factorized --embedding_rank 128 --max_iters 1000
+
+# Test generation from checkpoint
+python test_generation.py checkpoints_tinystories/best_model.pt
+```
+
+### Production Training (Currently Inactive)
+
+```bash
+# Main FP8 training script
 python train_fp8.py --config configs/fineweb_training_fp8.yaml
 
 # Train without FP8 (BF16 only)
