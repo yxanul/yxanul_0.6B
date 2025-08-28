@@ -8,7 +8,38 @@ import torch
 import torch.nn.functional as F
 import tiktoken
 from pathlib import Path
+from dataclasses import dataclass
+from typing import Optional
 from model import ModelConfig, SimpleGPT
+
+# Dummy TrainingConfig to allow unpickling
+@dataclass
+class TrainingConfig:
+    n_layer: int = 12
+    n_head: int = 12
+    n_embd: int = 768
+    vocab_size: int = 50257
+    block_size: int = 128
+    dropout: float = 0.0
+    batch_size: int = 64
+    gradient_accumulation_steps: int = 16
+    max_iters: int = 10000
+    eval_interval: int = 500
+    eval_iters: int = 100
+    learning_rate: float = 1e-4
+    min_lr: float = 5e-5
+    warmup_iters: int = 1000
+    weight_decay: float = 0.1
+    beta1: float = 0.9
+    beta2: float = 0.999
+    device: str = 'cuda'
+    dtype: str = 'bfloat16'
+    compile: bool = False
+    log_interval: int = 100
+    checkpoint_interval: int = 5000
+    checkpoint_dir: str = 'checkpoints_tinystories'
+    wandb_project: str = 'tinystories-precision-test'
+    wandb_run_name: Optional[str] = None
 
 def load_checkpoint(checkpoint_path: str, device: str = 'cuda'):
     """Load model from checkpoint."""
