@@ -31,7 +31,7 @@ class TrainingConfig:
     n_layer: int = 12         # GPT-2 small
     n_head: int = 12          # GPT-2 small
     n_embd: int = 768         # GPT-2 small
-    vocab_size: int = 50257   # GPT-2 vocab size
+    vocab_size: int = 50257   # GPT-2 vocab size (or 200005 for SuperBPE)
     block_size: int = 128     # Matches Reddit post
     dropout: float = 0.05  # Conservative dropout for regularization
     use_factorized_embedding: bool = False  # Enable factorized embeddings
@@ -62,6 +62,10 @@ class TrainingConfig:
     wandb_project: str = 'tinystories-precision-test'
     wandb_run_name: Optional[str] = None
     
+    # Data configuration
+    data_dir: str = 'data'  # Change to 'data_superbpe' for SuperBPE
+    use_superbpe: bool = False  # Set True to use SuperBPE tokenizer
+    
 # -----------------------------------------------------------------------------
 # Data loading (reuse memmaps for speed)
 _TRAIN_MM = None
@@ -82,8 +86,10 @@ def _get_memmap(split: str, data_dir: Path) -> np.memmap:
         return _VAL_MM
 
 
-def get_batch(split: str, config: TrainingConfig, data_dir: Path = Path('data')) -> Tuple[torch.Tensor, torch.Tensor]:
+def get_batch(split: str, config: TrainingConfig, data_dir: Path = None) -> Tuple[torch.Tensor, torch.Tensor]:
     """Get a batch of data from memory-mapped dataset."""
+    if data_dir is None:
+        data_dir = Path(config.data_dir)
     data = _get_memmap('train' if split == 'train' else 'val', data_dir)
     
     # Generate random positions
@@ -380,6 +386,8 @@ if __name__ == "__main__":
                        help='Use factorized embeddings (reduces model by ~32M params)')
     parser.add_argument('--embedding_rank', type=int, default=128,
                        help='Rank for factorized embeddings (default: 128)')
+    parser.add_argument('--superbpe', action='store_true',
+                       help='Use SuperBPE tokenizer (40% fewer tokens)')
     args = parser.parse_args()
     
     # Create config
@@ -389,11 +397,14 @@ if __name__ == "__main__":
         compile=args.compile,
         wandb_run_name=args.wandb_run_name,
         use_factorized_embedding=args.factorized,
-        embedding_rank=args.embedding_rank
+        embedding_rank=args.embedding_rank,
+        use_superbpe=args.superbpe,
+        data_dir='data_superbpe' if args.superbpe else 'data',
+        vocab_size=200005 if args.superbpe else 50257  # SuperBPE has 200k vocab
     )
     
     # Check if data exists
-    data_dir = Path('data')
+    data_dir = Path(config.data_dir)
     if not (data_dir / 'train.bin').exists():
         print("Data not found! Please run prepare_tinystories.py first")
         sys.exit(1)
