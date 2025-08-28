@@ -18,7 +18,7 @@ class ModelConfig:
     n_embd: int = 1024       # Embedding dimension
     n_kv_heads: int = 4      # GQA: 4 KV heads (4x compression)
     block_size: int = 2048   # Context length
-    dropout: float = 0.0     # No dropout for now
+    dropout: float = 0.05    # Conservative dropout for regularization
     bias: bool = False       # No bias in Linear/LayerNorm
     rope_theta: float = 10000.0
     

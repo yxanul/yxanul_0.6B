@@ -33,7 +33,7 @@ class TrainingConfig:
     n_embd: int = 768         # GPT-2 small
     vocab_size: int = 50257   # GPT-2 vocab size
     block_size: int = 128     # Matches Reddit post
-    dropout: float = 0.0
+    dropout: float = 0.05  # Conservative dropout for regularization
     
     # Training - Optimized for RTX 5090
     batch_size: int = 64      # Increased for RTX 5090
@@ -185,12 +185,13 @@ def train(config: TrainingConfig):
         print("FP32 mode: No mixed precision")
         ctx = nullcontext()
     
-    # Optimizer
+    # Optimizer - using fused version for ~5% speedup
     optimizer = torch.optim.AdamW(
         model.parameters(),
         lr=config.learning_rate,
         betas=(config.beta1, config.beta2),
-        weight_decay=config.weight_decay
+        weight_decay=config.weight_decay,
+        fused=True  # Fused optimizer reduces kernel launches
     )
     
     # Compile model if requested
