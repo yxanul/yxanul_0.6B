@@ -43,7 +43,7 @@ class TrainingConfig:
     eval_iters: int = 100      
     learning_rate: float = 1e-4  
     min_lr: float = 5e-5      
-    warmup_iters: int = 100    
+    warmup_iters: int = 1000  # Same as BF16 for fair comparison    
     weight_decay: float = 0.1
     beta1: float = 0.9
     beta2: float = 0.999
