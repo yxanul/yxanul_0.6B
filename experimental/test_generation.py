@@ -20,11 +20,13 @@ class TrainingConfig:
     n_embd: int = 768
     vocab_size: int = 50257
     block_size: int = 128
-    dropout: float = 0.0
+    dropout: float = 0.05  # Updated to match current training
+    use_factorized_embedding: bool = False  # Support factorized embeddings
+    embedding_rank: int = 128
     batch_size: int = 64
     gradient_accumulation_steps: int = 16
     max_iters: int = 10000
-    eval_interval: int = 500
+    eval_interval: int = 200  # Updated to match current
     eval_iters: int = 100
     learning_rate: float = 1e-4
     min_lr: float = 5e-5
@@ -47,17 +49,37 @@ def load_checkpoint(checkpoint_path: str, device: str = 'cuda'):
     # weights_only=False needed for checkpoints with config objects
     checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
     
-    # Create model with same config as training
-    config = ModelConfig(
-        vocab_size=50257,
-        n_layer=12,
-        n_head=12,
-        n_embd=768,
-        n_kv_heads=3,  # GQA with 4x compression
-        block_size=128,
-        dropout=0.0,
-        bias=False
-    )
+    # Try to extract config from checkpoint if available
+    if 'config' in checkpoint:
+        training_config = checkpoint['config']
+        # Create model config from training config
+        config = ModelConfig(
+            vocab_size=getattr(training_config, 'vocab_size', 50257),
+            n_layer=getattr(training_config, 'n_layer', 12),
+            n_head=getattr(training_config, 'n_head', 12),
+            n_embd=getattr(training_config, 'n_embd', 768),
+            n_kv_heads=getattr(training_config, 'n_head', 12) // 4,  # GQA with 4x compression
+            block_size=getattr(training_config, 'block_size', 128),
+            dropout=0.0,  # No dropout for inference
+            bias=False,
+            use_factorized_embedding=getattr(training_config, 'use_factorized_embedding', False),
+            embedding_rank=getattr(training_config, 'embedding_rank', 128)
+        )
+        print(f"Loaded config from checkpoint (factorized={config.use_factorized_embedding})")
+    else:
+        # Fallback to default config
+        config = ModelConfig(
+            vocab_size=50257,
+            n_layer=12,
+            n_head=12,
+            n_embd=768,
+            n_kv_heads=3,  # n_head // 4 = 12 // 4 = 3
+            block_size=128,
+            dropout=0.0,
+            bias=False,
+            use_factorized_embedding=False  # Default to regular
+        )
+        print("Using default config (no config in checkpoint)")
     
     model = SimpleGPT(config)
     model.load_state_dict(checkpoint['model'])
