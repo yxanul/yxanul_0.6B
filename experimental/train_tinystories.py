@@ -20,7 +20,7 @@ from torch.nn import functional as F
 import tiktoken
 
 # Import our model and logger
-from model import ModelConfig, GPT
+from model import ModelConfig, SimpleGPT as GPT
 from wandb_logger import WandBLogger
 
 # -----------------------------------------------------------------------------
