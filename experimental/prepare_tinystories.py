@@ -22,7 +22,16 @@ def main():
     
     # Load TinyStories dataset
     print("Loading TinyStories dataset...")
-    dataset = load_dataset("roneneldan/TinyStories")
+    try:
+        # Try the standard way first
+        dataset = load_dataset("roneneldan/TinyStories")
+    except ValueError as e:
+        if "Invalid pattern" in str(e):
+            # Fallback for newer datasets library versions
+            print("Using alternative loading method due to datasets library version...")
+            dataset = load_dataset("roneneldan/TinyStories", data_files={"train": "*.parquet", "validation": "*.parquet"})
+        else:
+            raise
     
     # Process each split
     for split in ['train', 'validation']:
