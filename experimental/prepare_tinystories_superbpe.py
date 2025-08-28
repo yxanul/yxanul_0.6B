@@ -36,38 +36,141 @@ def prepare_dataset():
         if not cache_base.exists():
             raise FileNotFoundError(f"Tokenizer cache not found at {cache_base}")
     
-    # Try loading from local cache
-    try:
-        # Try t80k first (as requested)
-        t80k_path = cache_base / "superbpe-t80k-fast"
-        if t80k_path.exists():
-            tokenizer = AutoTokenizer.from_pretrained(
-                str(t80k_path),
-                use_fast=True,
-                local_files_only=True
-            )
-            print(f"Loaded SuperBPE-t80k from {t80k_path}")
-        else:
-            # Fallback to t180k
-            t180k_path = cache_base / "superbpe-t180k-fast"
-            if t180k_path.exists():
-                tokenizer = AutoTokenizer.from_pretrained(
-                    str(t180k_path),
-                    use_fast=True,
-                    local_files_only=True
+    # Try loading SuperBPE from local cache
+    tokenizer = None
+    error_messages = []
+    
+    # Method 1: Try constructing tokenizer directly from vocab files
+    print("Attempting to construct SuperBPE tokenizer from vocab files...")
+    
+    # Try t80k first
+    t80k_path = cache_base / "superbpe-t80k-fast"
+    if t80k_path.exists():
+        print(f"Found t80k cache at {t80k_path}")
+        
+        # Check what files we have
+        vocab_file = t80k_path / "vocab.json"
+        merges_file = t80k_path / "merges.txt"
+        
+        if vocab_file.exists() and merges_file.exists():
+            print("Found vocab.json and merges.txt - constructing tokenizer manually...")
+            try:
+                from tokenizers import Tokenizer, models, pre_tokenizers, decoders, processors
+                from transformers import PreTrainedTokenizerFast
+                import json
+                
+                # Load vocabulary
+                with open(vocab_file, 'r', encoding='utf-8') as f:
+                    vocab = json.load(f)
+                
+                # Load merges
+                with open(merges_file, 'r', encoding='utf-8') as f:
+                    merges = f.read().strip().split('\n')
+                
+                # Create a BPE tokenizer manually
+                tokenizer_model = models.BPE(vocab=vocab, merges=merges)
+                tokenizer_obj = Tokenizer(tokenizer_model)
+                
+                # Set pre-tokenizer and decoder
+                tokenizer_obj.pre_tokenizer = pre_tokenizers.ByteLevel(add_prefix_space=False)
+                tokenizer_obj.decoder = decoders.ByteLevel()
+                tokenizer_obj.post_processor = processors.ByteLevel(trim_offsets=False)
+                
+                # Wrap in PreTrainedTokenizerFast
+                tokenizer = PreTrainedTokenizerFast(
+                    tokenizer_object=tokenizer_obj,
+                    bos_token="<|endoftext|>",
+                    eos_token="<|endoftext|>",
+                    unk_token="<|endoftext|>",
+                    pad_token="<|endoftext|>"
                 )
-                print(f"Loaded SuperBPE-t180k from {t180k_path}")
-            else:
-                # Try downloading if cache doesn't exist
-                print("Local cache not found, trying to download...")
+                print(f"SUCCESS: Manually constructed SuperBPE-t80k fast tokenizer!")
+                print(f"Vocabulary size: {len(vocab)}")
+                
+            except Exception as e:
+                error_messages.append(f"Manual construction t80k: {e}")
+                print(f"Failed to manually construct t80k: {e}")
+    
+    # Try t180k if t80k failed
+    if tokenizer is None:
+        t180k_path = cache_base / "superbpe-t180k-fast"
+        if t180k_path.exists():
+            print(f"Found t180k cache at {t180k_path}")
+            
+            vocab_file = t180k_path / "vocab.json"
+            merges_file = t180k_path / "merges.txt"
+            
+            if vocab_file.exists() and merges_file.exists():
+                print("Found vocab.json and merges.txt - constructing tokenizer manually...")
+                try:
+                    from tokenizers import Tokenizer, models, pre_tokenizers, decoders, processors
+                    from transformers import PreTrainedTokenizerFast
+                    import json
+                    
+                    # Load vocabulary
+                    with open(vocab_file, 'r', encoding='utf-8') as f:
+                        vocab = json.load(f)
+                    
+                    # Load merges
+                    with open(merges_file, 'r', encoding='utf-8') as f:
+                        merges = f.read().strip().split('\n')
+                    
+                    # Create a BPE tokenizer manually
+                    tokenizer_model = models.BPE(vocab=vocab, merges=merges)
+                    tokenizer_obj = Tokenizer(tokenizer_model)
+                    
+                    # Set pre-tokenizer and decoder
+                    tokenizer_obj.pre_tokenizer = pre_tokenizers.ByteLevel(add_prefix_space=False)
+                    tokenizer_obj.decoder = decoders.ByteLevel()
+                    tokenizer_obj.post_processor = processors.ByteLevel(trim_offsets=False)
+                    
+                    # Wrap in PreTrainedTokenizerFast
+                    tokenizer = PreTrainedTokenizerFast(
+                        tokenizer_object=tokenizer_obj,
+                        bos_token="<|endoftext|>",
+                        eos_token="<|endoftext|>",
+                        unk_token="<|endoftext|>",
+                        pad_token="<|endoftext|>"
+                    )
+                    print(f"SUCCESS: Manually constructed SuperBPE-t180k fast tokenizer!")
+                    print(f"Vocabulary size: {len(vocab)}")
+                    
+                except Exception as e:
+                    error_messages.append(f"Manual construction t180k: {e}")
+                    print(f"Failed to manually construct t180k: {e}")
+    
+    # Method 2: Try downloading fresh SuperBPE tokenizers
+    if tokenizer is None:
+        print("\nTrying to download fresh SuperBPE tokenizers...")
+        
+        # List of OLMo models that use SuperBPE
+        models_to_try = [
+            "allenai/OLMo-7B-0724-hf",  # OLMo with BPE
+            "allenai/OLMo-1.7-7B-hf",    # Newer OLMo
+        ]
+        
+        for model_name in models_to_try:
+            try:
+                print(f"Downloading tokenizer from {model_name}...")
                 tokenizer = AutoTokenizer.from_pretrained(
-                    "allenai/OLMo-7B-0724-hf",  # Fallback to known working tokenizer
-                    use_fast=True
+                    model_name,
+                    use_fast=True  # We need fast tokenizer for performance
                 )
-                print("Loaded fallback OLMo tokenizer")
-    except Exception as e:
-        print(f"Error loading tokenizer: {e}")
-        raise
+                print(f"SUCCESS: Downloaded fast tokenizer from {model_name}")
+                print(f"Vocabulary size: {len(tokenizer)}")
+                break
+            except Exception as e:
+                error_messages.append(f"Download {model_name}: {e}")
+    
+    if tokenizer is None:
+        print("\n===== ERROR SUMMARY =====")
+        for msg in error_messages:
+            print(f"  - {msg}")
+        print("\nSUGGESTIONS:")
+        print("  1. Install tokenizers library: pip install tokenizers")
+        print("  2. Check if vocab.json and merges.txt exist in cache directories")
+        print("  3. Allow downloading OLMo tokenizers as fallback")
+        raise RuntimeError("Failed to load SuperBPE tokenizer - see errors above")
     
     print(f"Vocabulary size: {len(tokenizer)}")
     
