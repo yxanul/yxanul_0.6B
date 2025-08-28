@@ -116,14 +116,28 @@ def generate(model, prompt: str, max_tokens: int = 150, temperature: float = 0.8
         if x.size(1) > 128:  # block_size
             x = x[:, -128:]
         
+        # Pad sequence length to multiple of 8 for FP8
+        seq_len = x.size(1)
+        if HAS_TE and seq_len % 8 != 0:
+            pad_len = 8 - (seq_len % 8)
+            padding = torch.zeros(1, pad_len, dtype=x.dtype, device=x.device)
+            x_padded = torch.cat([x, padding], dim=1)
+        else:
+            x_padded = x
+            pad_len = 0
+        
         # Forward pass (with optional FP8 for inference)
         if HAS_TE:
             with torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16):
                 with te.fp8_autocast(enabled=True, fp8_recipe=fp8_recipe):
-                    logits, _ = model(x)
+                    logits, _ = model(x_padded)
         else:
             with torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16):
-                logits, _ = model(x)
+                logits, _ = model(x_padded)
+        
+        # Remove padding from output if added
+        if pad_len > 0:
+            logits = logits[:, :seq_len, :]
         
         logits = logits[:, -1, :] / temperature
         
