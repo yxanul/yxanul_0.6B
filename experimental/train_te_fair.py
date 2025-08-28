@@ -40,7 +40,7 @@ class TrainingConfig:
     n_layer: int = 12         
     n_head: int = 12          
     n_embd: int = 768         
-    vocab_size: int = 50264   # Minimal padding from 50257 (only 7 tokens)
+    vocab_size: int = 50256   # Padded to multiple of 16 for FP8 (50256 ÷ 16 = 3141)
     block_size: int = 128     # Same as original
     dropout: float = 0.0
     
@@ -179,9 +179,9 @@ def train(config: TrainingConfig):
         config=vars(config)
     )
     
-    # Create model - same config for both FP8 and BF16
+    # Create model - override FFN size to match original
     model_config = TEModelConfig(
-        vocab_size=config.vocab_size,  # 50264 (minimal padding)
+        vocab_size=config.vocab_size,  # 50272 (divisible by 16)
         n_layer=config.n_layer,
         n_head=config.n_head,
         n_embd=config.n_embd,
@@ -190,6 +190,9 @@ def train(config: TrainingConfig):
         dropout=config.dropout,
         bias=False
     )
+    # Override FFN size to match original model (not the auto-calculated one)
+    # Original uses 768 * 8/3 = 2048, but we want smaller for 113M total
+    model_config.ffn_hidden_size = 2048  # This gives us ~113M params
     
     model = TETransformerGPT(model_config)
     model = model.to(config.device)

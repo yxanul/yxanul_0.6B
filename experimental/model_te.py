@@ -249,12 +249,16 @@ class TETransformerGPT(nn.Module):
             zero_centered_gamma=True
         )
         
-        # Output head (TE Linear for FP8)
-        self.lm_head = te.Linear(
+        # Output head - use regular Linear so we can tie weights
+        # TE Linear doesn't support weight tying easily
+        self.lm_head = nn.Linear(
             config.n_embd,
             config.vocab_size,
             bias=False,
         )
+        
+        # Weight tying to save parameters (like original GPT-2)
+        self.lm_head.weight = self.wte.weight
         
         # RoPE cache
         self.register_buffer('rope_cache',
