@@ -391,6 +391,17 @@ if __name__ == "__main__":
     args = parser.parse_args()
     
     # Create config
+    # Adjust settings for SuperBPE's large vocabulary to avoid OOM
+    if args.superbpe:
+        # Reduce memory usage for 200k vocabulary
+        batch_size = 16  # Reduced from 64
+        block_size = 64  # Reduced from 128
+        gradient_accumulation_steps = 64  # Increased to maintain effective batch size
+    else:
+        batch_size = 64
+        block_size = 128
+        gradient_accumulation_steps = 16
+    
     config = TrainingConfig(
         dtype=args.dtype,
         max_iters=args.max_iters,
@@ -400,7 +411,10 @@ if __name__ == "__main__":
         embedding_rank=args.embedding_rank,
         use_superbpe=args.superbpe,
         data_dir='data_superbpe' if args.superbpe else 'data',
-        vocab_size=200005 if args.superbpe else 50257  # SuperBPE has 200k vocab
+        vocab_size=200005 if args.superbpe else 50257,  # SuperBPE has 200k vocab
+        batch_size=batch_size,
+        block_size=block_size,
+        gradient_accumulation_steps=gradient_accumulation_steps
     )
     
     # Check if data exists
