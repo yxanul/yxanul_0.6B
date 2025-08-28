@@ -49,7 +49,7 @@ class TrainingConfig:
     batch_size: int = 64      # Increased for RTX 5090
     gradient_accumulation_steps: int = 16  # Reduced since we increased batch_size
     max_iters: int = 1000     # Quick experiments
-    eval_interval: int = 500   
+    eval_interval: int = 200  # More frequent eval for better tracking   
     eval_iters: int = 100      
     learning_rate: float = 1e-4  
     min_lr: float = 5e-5      

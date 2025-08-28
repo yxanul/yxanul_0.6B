@@ -39,7 +39,7 @@ class TrainingConfig:
     batch_size: int = 64      # Increased for RTX 5090
     gradient_accumulation_steps: int = 16  # Reduced since we increased batch_size
     max_iters: int = 10000    # ~10 epochs over TinyStories
-    eval_interval: int = 500   # Matches Reddit post
+    eval_interval: int = 200  # More frequent eval for better tracking   # Matches Reddit post
     eval_iters: int = 100      # Reasonable for quick eval
     learning_rate: float = 1e-4  # Matches Reddit post
     min_lr: float = 5e-5      # Matches Reddit post
@@ -61,19 +61,28 @@ class TrainingConfig:
     wandb_run_name: Optional[str] = None
     
 # -----------------------------------------------------------------------------
-# Data loading
+# Data loading (reuse memmaps for speed)
+_TRAIN_MM = None
+_VAL_MM = None
+
+def _get_memmap(split: str, data_dir: Path) -> np.memmap:
+    global _TRAIN_MM, _VAL_MM
+    if split == 'train':
+        if _TRAIN_MM is None:
+            _TRAIN_MM = np.memmap(data_dir / 'train.bin', dtype=np.uint16, mode='r')
+        return _TRAIN_MM
+    else:
+        if _VAL_MM is None:
+            val_path = data_dir / 'val.bin'
+            if not val_path.exists():
+                val_path = data_dir / 'validation.bin'
+            _VAL_MM = np.memmap(val_path, dtype=np.uint16, mode='r')
+        return _VAL_MM
+
 
 def get_batch(split: str, config: TrainingConfig, data_dir: Path = Path('data')) -> Tuple[torch.Tensor, torch.Tensor]:
     """Get a batch of data from memory-mapped dataset."""
-    # Load the appropriate data
-    if split == 'train':
-        data = np.memmap(data_dir / 'train.bin', dtype=np.uint16, mode='r')
-    else:
-        # Prefer val.bin, fall back to validation.bin for backward compatibility
-        val_path = data_dir / 'val.bin'
-        if not val_path.exists():
-            val_path = data_dir / 'validation.bin'
-        data = np.memmap(val_path, dtype=np.uint16, mode='r')
+    data = _get_memmap('train' if split == 'train' else 'val', data_dir)
     
     # Generate random positions
     ix = torch.randint(len(data) - config.block_size, (config.batch_size,))
@@ -83,7 +92,11 @@ def get_batch(split: str, config: TrainingConfig, data_dir: Path = Path('data'))
     y = torch.stack([torch.from_numpy((data[i+1:i+1+config.block_size]).astype(np.int64)) for i in ix])
     
     # Move to device
-    x, y = x.to(config.device), y.to(config.device)
+    if config.device.startswith('cuda'):
+        x = x.pin_memory().to(config.device, non_blocking=True)
+        y = y.pin_memory().to(config.device, non_blocking=True)
+    else:
+        x, y = x.to(config.device), y.to(config.device)
     return x, y
 
 @torch.no_grad()
@@ -95,7 +108,10 @@ def estimate_loss(model: nn.Module, config: TrainingConfig) -> dict:
         losses = torch.zeros(config.eval_iters)
         for k in range(config.eval_iters):
             X, Y = get_batch('validation' if split == 'val' else split, config)
-            with torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16):
+            device_type = 'cuda' if config.device.startswith('cuda') else 'cpu'
+            amp_dtype = torch.bfloat16 if config.dtype == 'bfloat16' else (torch.float16 if config.dtype == 'float16' else torch.float32)
+            ctx = torch.amp.autocast(device_type=device_type, dtype=amp_dtype) if device_type == 'cuda' else nullcontext()
+            with ctx:
                 logits, loss = model(X, Y)
             losses[k] = loss.item()
         out[split] = losses.mean()
@@ -120,6 +136,11 @@ def get_lr(iter_num: int, config: TrainingConfig) -> float:
 
 def train(config: TrainingConfig):
     """Main training loop."""
+    # Seeds & TF32 for speed
+    torch.manual_seed(1337)
+    if torch.cuda.is_available():
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
     
     # Initialize wandb
     wandb_logger = WandBLogger(
@@ -246,15 +267,20 @@ def train(config: TrainingConfig):
         
         # Logging
         if iter_num % config.log_interval == 0:
+            # Count this iteration in the window
+            local_iter_num = max(1, local_iter_num)
             t1 = time.time()
             dt = t1 - t0
-            tokens_per_sec = config.batch_size * config.gradient_accumulation_steps * config.block_size * local_iter_num / dt
+            tokens_per_iter = config.batch_size * config.gradient_accumulation_steps * config.block_size
+            tokens_per_sec = tokens_per_iter * local_iter_num / dt
+            avg_ms_per_iter = (dt / local_iter_num) * 1000.0
             print(f"iter {iter_num}: loss {loss.item()*config.gradient_accumulation_steps:.4f}, "
-                  f"time {dt*1000:.2f}ms, {tokens_per_sec:.0f} tok/s, lr {lr:.2e}")
+                  f"window {dt*1000:.2f}ms ({avg_ms_per_iter:.2f} ms/iter), {tokens_per_sec:.0f} tok/s, lr {lr:.2e}")
             wandb_logger.log_metrics({
                 'train/loss': loss.item() * config.gradient_accumulation_steps,
                 'train/lr': lr,
                 'train/tokens_per_sec': tokens_per_sec,
+                'train/avg_ms_per_iter': avg_ms_per_iter,
             }, step=iter_num)
             t0 = time.time()
             local_iter_num = 0
@@ -299,7 +325,8 @@ def generate(model: nn.Module, prompt: str, max_tokens: int = 200, temperature: 
     
     # Encode prompt
     tokens = enc.encode(prompt)
-    x = torch.tensor(tokens, dtype=torch.long, device='cuda').unsqueeze(0)
+    device = next(model.parameters()).device
+    x = torch.tensor(tokens, dtype=torch.long, device=device).unsqueeze(0)
     
     model.eval()
     with torch.no_grad():
