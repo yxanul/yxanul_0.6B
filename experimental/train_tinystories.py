@@ -69,7 +69,11 @@ def get_batch(split: str, config: TrainingConfig, data_dir: Path = Path('data'))
     if split == 'train':
         data = np.memmap(data_dir / 'train.bin', dtype=np.uint16, mode='r')
     else:
-        data = np.memmap(data_dir / 'validation.bin', dtype=np.uint16, mode='r')
+        # Prefer val.bin, fall back to validation.bin for backward compatibility
+        val_path = data_dir / 'val.bin'
+        if not val_path.exists():
+            val_path = data_dir / 'validation.bin'
+        data = np.memmap(val_path, dtype=np.uint16, mode='r')
     
     # Generate random positions
     ix = torch.randint(len(data) - config.block_size, (config.batch_size,))
