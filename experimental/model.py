@@ -26,6 +26,8 @@ class ModelConfig:
         assert self.n_embd % self.n_head == 0
         assert self.n_head % self.n_kv_heads == 0
         self.head_dim = self.n_embd // self.n_head
+        # RoPE requires even head_dim (pairs of features)
+        assert self.head_dim % 2 == 0, "head_dim must be even for RoPE (n_embd/n_head)"
 
 
 class RMSNorm(nn.Module):
@@ -55,9 +57,9 @@ class RoPE:
         # x: [batch, seq_len, n_heads, head_dim]
         batch, seq_len, n_heads, head_dim = x.shape
         x = x.reshape(batch, seq_len, n_heads, head_dim // 2, 2)
-        
-        cos_cache = cos_sin_cache[:seq_len, :, 0]
-        sin_cache = cos_sin_cache[:seq_len, :, 1]
+        # Ensure cache is on the right device/dtype for efficient matmul
+        cos_cache = cos_sin_cache[:seq_len, :, 0].to(device=x.device, dtype=x.dtype)
+        sin_cache = cos_sin_cache[:seq_len, :, 1].to(device=x.device, dtype=x.dtype)
         
         # Apply rotation
         x_rot = torch.stack([

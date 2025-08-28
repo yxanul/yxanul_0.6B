@@ -5,6 +5,7 @@ We know it's ~1B tokens, just tokenize and write directly.
 """
 
 import os
+import math
 import numpy as np
 from pathlib import Path
 from datasets import load_dataset
@@ -68,9 +69,11 @@ def prepare_dataset_fast(
         # Pre-allocate array with estimated size (we'll resize at the end)
         filename = Path(output_dir) / f"{split_name}.bin"
         dtype = np.uint32 if len(tokenizer) > 65535 else np.uint16
+        dtype_itemsize = np.dtype(dtype).itemsize
         
-        # Allocate with some buffer
-        arr = np.memmap(filename, dtype=dtype, mode='w+', shape=(int(size_estimate * 1.1),))
+        # Allocate with some buffer (elements, not bytes)
+        initial_len = int(size_estimate * 1.1)
+        arr = np.memmap(filename, dtype=dtype, mode='w+', shape=(initial_len,))
         
         # Tokenize and write directly (no separate counting phase)
         idx = 0
@@ -84,19 +87,24 @@ def prepare_dataset_fast(
                 for example in batch['text']:
                     ids = tokenizer.encode(example, max_length=max_length, truncation=True)
                     
-                    # Check if we need to resize
-                    if idx + len(ids) > len(arr):
-                        # Extend array
-                        arr._mmap.resize(int(len(arr) * 1.5))
-                        arr = np.memmap(filename, dtype=dtype, mode='r+', shape=(int(len(arr) * 1.5),))
+                    # Check if we need to resize (in elements)
+                    if idx + len(ids) > arr.shape[0]:
+                        # Extend array to at least required size, or 1.5x growth
+                        new_len = max(idx + len(ids), int(math.ceil(arr.shape[0] * 1.5)))
+                        # Resize underlying file in BYTES
+                        arr.flush()
+                        arr._mmap.resize(new_len * dtype_itemsize)
+                        # Reopen memmap with new element count
+                        arr = np.memmap(filename, dtype=dtype, mode='r+', shape=(new_len,))
                     
                     arr[idx:idx+len(ids)] = ids
                     idx += len(ids)
                 
                 pbar.update(len(batch['text']))
         
-        # Trim to actual size
-        arr._mmap.resize(idx * dtype.itemsize)
+        # Trim to actual size (bytes)
+        arr.flush()
+        arr._mmap.resize(idx * dtype_itemsize)
         arr = np.memmap(filename, dtype=dtype, mode='r+', shape=(idx,))
         arr.flush()
         
