@@ -73,9 +73,10 @@ def prepare_dataset():
     # Look for TinyStories parquet files
     data_dir = None
     possible_locations = [
+        Path('TinyStories-hf/data'),  # Current location in experimental/
+        Path('TinyStories-hf'),  # Without data subdirectory
         Path('../TinyStories'),  # Parent directory
-        Path('../TinyStories-hf'),  # HuggingFace format
-        Path('TinyStories'),  # Current directory
+        Path('../TinyStories-hf'),  # HuggingFace format in parent
         Path('/workspace/TinyStories'),  # Absolute path on RunPod
     ]
     
