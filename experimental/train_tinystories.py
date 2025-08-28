@@ -34,6 +34,8 @@ class TrainingConfig:
     vocab_size: int = 50257   # GPT-2 vocab size
     block_size: int = 128     # Matches Reddit post
     dropout: float = 0.05  # Conservative dropout for regularization
+    use_factorized_embedding: bool = False  # Enable factorized embeddings
+    embedding_rank: int = 128  # Rank for factorization
     
     # Training - Optimized for RTX 5090
     batch_size: int = 64      # Increased for RTX 5090
@@ -158,7 +160,9 @@ def train(config: TrainingConfig):
         n_kv_heads=config.n_head // 4,  # GQA with 4x compression
         block_size=config.block_size,
         dropout=config.dropout,
-        bias=False
+        bias=False,
+        use_factorized_embedding=config.use_factorized_embedding,
+        embedding_rank=config.embedding_rank
     )
     
     model = GPT(model_config)
@@ -372,6 +376,10 @@ if __name__ == "__main__":
                        help='Use torch.compile()')
     parser.add_argument('--wandb_run_name', type=str, default=None,
                        help='Custom wandb run name')
+    parser.add_argument('--factorized', action='store_true',
+                       help='Use factorized embeddings (reduces model by ~32M params)')
+    parser.add_argument('--embedding_rank', type=int, default=128,
+                       help='Rank for factorized embeddings (default: 128)')
     args = parser.parse_args()
     
     # Create config
@@ -379,7 +387,9 @@ if __name__ == "__main__":
         dtype=args.dtype,
         max_iters=args.max_iters,
         compile=args.compile,
-        wandb_run_name=args.wandb_run_name
+        wandb_run_name=args.wandb_run_name,
+        use_factorized_embedding=args.factorized,
+        embedding_rank=args.embedding_rank
     )
     
     # Check if data exists

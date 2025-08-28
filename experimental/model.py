@@ -21,6 +21,9 @@ class ModelConfig:
     dropout: float = 0.05    # Conservative dropout for regularization
     bias: bool = False       # No bias in Linear/LayerNorm
     rope_theta: float = 10000.0
+    # Factorized embedding settings
+    use_factorized_embedding: bool = False  # Enable factorized embeddings
+    embedding_rank: int = 128  # Rank for factorization (r)
     
     def __post_init__(self):
         assert self.n_embd % self.n_head == 0
@@ -40,6 +43,32 @@ class RMSNorm(nn.Module):
     def forward(self, x):
         norm = torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
         return x * norm * self.weight
+
+
+class FactorizedEmbedding(nn.Module):
+    """
+    Factorized embedding: vocab_size × n_embd → (vocab_size × r) × (r × n_embd)
+    Reduces parameters from V×D to V×r + r×D where r << D
+    """
+    def __init__(self, vocab_size, n_embd, r=128):
+        super().__init__()
+        self.vocab_size = vocab_size
+        self.n_embd = n_embd
+        self.r = r
+        
+        # Two smaller matrices instead of one large one
+        self.embed_in = nn.Embedding(vocab_size, r)
+        self.embed_out = nn.Linear(r, n_embd, bias=False)
+        
+        # Initialize with careful scaling for stability
+        nn.init.normal_(self.embed_in.weight, mean=0.0, std=0.02)
+        nn.init.normal_(self.embed_out.weight, mean=0.0, std=0.02 / math.sqrt(2))
+        
+    def forward(self, x):
+        # x: [batch, seq_len]
+        x = self.embed_in(x)  # [batch, seq_len, r]
+        x = self.embed_out(x)  # [batch, seq_len, n_embd]
+        return x
 
 
 class RoPE:
@@ -177,17 +206,25 @@ class SimpleGPT(nn.Module):
         super().__init__()
         self.config = config
         
+        # Use factorized or regular embeddings based on config
+        if config.use_factorized_embedding:
+            wte = FactorizedEmbedding(config.vocab_size, config.n_embd, r=config.embedding_rank)
+            # For factorized, we need a separate projection for LM head
+            # We use a simple linear layer (no factorization) to keep generation fast
+            self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
+        else:
+            wte = nn.Embedding(config.vocab_size, config.n_embd)
+            self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
+            # Weight tying (saves memory) - only for regular embeddings
+            wte.weight = self.lm_head.weight
+        
         # Token and position embeddings
         self.transformer = nn.ModuleDict(dict(
-            wte = nn.Embedding(config.vocab_size, config.n_embd),
+            wte = wte,
             drop = nn.Dropout(config.dropout),
             h = nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
             ln_f = RMSNorm(config.n_embd),
         ))
-        self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
-        
-        # Weight tying (saves memory)
-        self.transformer.wte.weight = self.lm_head.weight
         
         # Create RoPE cache
         self.register_buffer('rope_cache', 
@@ -202,7 +239,16 @@ class SimpleGPT(nn.Module):
             if pn.endswith('o_proj.weight') or pn.endswith('down_proj.weight'):
                 torch.nn.init.normal_(p, mean=0.0, std=0.02/math.sqrt(2 * config.n_layer))
         
-        print(f"Model initialized: {self.num_parameters():,} parameters")
+        total_params = self.num_parameters()
+        if config.use_factorized_embedding:
+            regular_embed_size = config.vocab_size * config.n_embd
+            factorized_embed_size = config.vocab_size * config.embedding_rank + config.embedding_rank * config.n_embd
+            saved = regular_embed_size - factorized_embed_size
+            print(f"Model initialized with factorized embeddings (rank={config.embedding_rank})")
+            print(f"  Total parameters: {total_params:,}")
+            print(f"  Embedding params saved: {saved:,} ({saved/1e6:.1f}M)")
+        else:
+            print(f"Model initialized: {total_params:,} parameters")
     
     def _init_weights(self, module):
         if isinstance(module, nn.Linear):
