@@ -71,6 +71,32 @@ class FactorizedEmbedding(nn.Module):
         return x
 
 
+class FactorizedLMHead(nn.Module):
+    """
+    Factorized LM head: n_embd × vocab_size → (n_embd × r) × (r × vocab_size)
+    Matches the factorized embedding for consistency
+    """
+    def __init__(self, n_embd, vocab_size, r=128):
+        super().__init__()
+        self.n_embd = n_embd
+        self.vocab_size = vocab_size
+        self.r = r
+        
+        # Two projections (reverse of embedding)
+        self.proj_in = nn.Linear(n_embd, r, bias=False)
+        self.proj_out = nn.Linear(r, vocab_size, bias=False)
+        
+        # Initialize
+        nn.init.normal_(self.proj_in.weight, mean=0.0, std=0.02)
+        nn.init.normal_(self.proj_out.weight, mean=0.0, std=0.02 / math.sqrt(2))
+        
+    def forward(self, x):
+        # x: [batch, seq_len, n_embd]
+        x = self.proj_in(x)   # [batch, seq_len, r]
+        x = self.proj_out(x)  # [batch, seq_len, vocab_size]
+        return x
+
+
 class RoPE:
     """Rotary Position Embeddings - better than learned positional embeddings."""
     @staticmethod
@@ -209,9 +235,8 @@ class SimpleGPT(nn.Module):
         # Use factorized or regular embeddings based on config
         if config.use_factorized_embedding:
             wte = FactorizedEmbedding(config.vocab_size, config.n_embd, r=config.embedding_rank)
-            # For factorized, we need a separate projection for LM head
-            # We use a simple linear layer (no factorization) to keep generation fast
-            self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
+            # Use factorized LM head to match the embedding savings
+            self.lm_head = FactorizedLMHead(config.n_embd, config.vocab_size, r=config.embedding_rank)
         else:
             wte = nn.Embedding(config.vocab_size, config.n_embd)
             self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
@@ -241,12 +266,15 @@ class SimpleGPT(nn.Module):
         
         total_params = self.num_parameters()
         if config.use_factorized_embedding:
-            regular_embed_size = config.vocab_size * config.n_embd
-            factorized_embed_size = config.vocab_size * config.embedding_rank + config.embedding_rank * config.n_embd
-            saved = regular_embed_size - factorized_embed_size
-            print(f"Model initialized with factorized embeddings (rank={config.embedding_rank})")
+            # Calculate actual savings (both embedding and LM head are factorized)
+            regular_size = 2 * (config.vocab_size * config.n_embd)  # embed + lm_head
+            factorized_size = 2 * (config.vocab_size * config.embedding_rank + config.embedding_rank * config.n_embd)
+            saved = regular_size - factorized_size
+            print(f"Model initialized with factorized embeddings and LM head (rank={config.embedding_rank})")
             print(f"  Total parameters: {total_params:,}")
-            print(f"  Embedding params saved: {saved:,} ({saved/1e6:.1f}M)")
+            print(f"  Parameters saved: {saved:,} ({saved/1e6:.1f}M)")
+            regular_model_size = total_params + saved  # What it would be without factorization
+            print(f"  vs regular model: {regular_model_size/1e6:.1f}M → {total_params/1e6:.1f}M")
         else:
             print(f"Model initialized: {total_params:,} parameters")
     
