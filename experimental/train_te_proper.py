@@ -28,7 +28,15 @@ try:
     import transformer_engine.pytorch as te
     from transformer_engine.common.recipe import Format, DelayedScaling
     HAS_TE = True
-    print(f"TransformerEngine version: {te.__version__}")
+    # Version check - TE doesn't expose __version__ directly
+    try:
+        import transformer_engine
+        if hasattr(transformer_engine, '__version__'):
+            print(f"TransformerEngine version: {transformer_engine.__version__}")
+        else:
+            print("TransformerEngine loaded successfully")
+    except:
+        print("TransformerEngine loaded (version unknown)")
 except ImportError:
     print("Error: TransformerEngine required!")
     sys.exit(1)
