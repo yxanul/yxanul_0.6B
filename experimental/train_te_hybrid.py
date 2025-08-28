@@ -120,9 +120,10 @@ def estimate_loss(model: nn.Module, config: TrainingConfig, fp8_recipe) -> dict:
         for k in range(config.eval_iters):
             X, Y = get_batch('validation' if split == 'val' else split, config)
             
-            # Use FP8 autocast for evaluation
-            with te.fp8_autocast(enabled=True, fp8_recipe=fp8_recipe):
-                logits, loss = model(X, Y)
+            # Use FP8 autocast for evaluation; ensure BF16 activations
+            with torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16):
+                with te.fp8_autocast(enabled=True, fp8_recipe=fp8_recipe):
+                    logits, loss = model(X, Y)
             
             losses[k] = loss.item()
         out[split] = losses.mean()
@@ -195,6 +196,15 @@ def train(config: TrainingConfig):
     print(f"  Block size: {config.block_size}")
     print(f"  Batch size: {config.batch_size}")
     print(f"  Effective batch: {config.batch_size * config.gradient_accumulation_steps}")
+    cc = torch.cuda.get_device_capability()
+    print(f"  Device CC: {cc}")
+    # Preflight FP8 alignment assertions for cuBLASLt
+    m = config.batch_size * config.block_size
+    assert config.n_embd % 16 == 0, "n_embd must be divisible by 16 for FP8"
+    assert config.vocab_size % 16 == 0, "vocab_size must be divisible by 16 for FP8 GEMM"
+    assert config.block_size % 16 == 0, "block_size should be divisible by 16 for FP8"
+    assert config.batch_size % 8 == 0, "batch_size should be divisible by 8 for FP8"
+    assert m % 16 == 0, "batch_size*block_size must be divisible by 16 (GEMM M)"
     
     # Optimizer
     optimizer = torch.optim.AdamW(
@@ -256,9 +266,10 @@ def train(config: TrainingConfig):
             for micro_step in range(config.gradient_accumulation_steps):
                 X, Y = get_batch('train', config)
                 
-                # Forward pass with FP8 HYBRID
-                with te.fp8_autocast(enabled=True, fp8_recipe=fp8_recipe):
-                    logits, loss = model(X, Y)
+                # Forward pass with FP8 HYBRID; ensure BF16 activations
+                with torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16):
+                    with te.fp8_autocast(enabled=True, fp8_recipe=fp8_recipe, calibrating=calibrating):
+                        logits, loss = model(X, Y)
                 
                 loss = loss / config.gradient_accumulation_steps
                 loss.backward()

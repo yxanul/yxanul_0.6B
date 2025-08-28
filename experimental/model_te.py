@@ -104,10 +104,12 @@ class TEAttention(nn.Module):
         
     def forward(self, x, rope_cache):
         B, T, C = x.shape
+        # Ensure contiguous and 2D for TE GEMM (M=B*T, K=C)
+        x2d = x.contiguous().view(B * T, C)
         
         # Compute Q, K, V in one projection
-        qkv = self.qkv_proj(x)
-        qkv = qkv.reshape(B, T, 3, self.n_head, self.head_dim)
+        qkv = self.qkv_proj(x2d)
+        qkv = qkv.view(B, T, 3, self.n_head, self.head_dim)
         qkv = qkv.permute(2, 0, 1, 3, 4)  # [3, B, T, n_head, head_dim]
         q, k, v = qkv[0], qkv[1], qkv[2]
         
@@ -143,7 +145,9 @@ class TEAttention(nn.Module):
         y = y.transpose(1, 2).contiguous().view(B, T, C)
         
         # Output projection
-        y = self.o_proj(y)
+        y2d = y.contiguous().view(B * T, C)
+        y2d = self.o_proj(y2d)
+        y = y2d.view(B, T, C)
         y = self.resid_dropout(y)
         
         return y
@@ -172,20 +176,21 @@ class TEMLP(nn.Module):
         self.dropout = nn.Dropout(config.dropout)
         
     def forward(self, x):
+        B, T, C = x.shape
+        x2d = x.contiguous().view(B * T, C)
         # Combined gate and up projection
-        gate_up = self.gate_up_proj(x)
+        gate_up = self.gate_up_proj(x2d)
         
         # Split into gate and up
         gate, up = gate_up.chunk(2, dim=-1)
         
         # SwiGLU activation
-        x = F.silu(gate) * up
+        x_act = F.silu(gate) * up
         
         # Down projection
-        x = self.down_proj(x)
-        x = self.dropout(x)
-        
-        return x
+        x2d = self.down_proj(x_act)
+        x2d = self.dropout(x2d)
+        return x2d.view(B, T, C)
 
 
 class TEBlock(nn.Module):
@@ -303,7 +308,11 @@ class TETransformerGPT(nn.Module):
         
         # Final norm and output
         x = self.ln_f(x)
-        logits = self.lm_head(x)
+        # Flatten to 2D for TE GEMM
+        B, T, C = x.shape
+        x2d = x.contiguous().view(B * T, C)
+        logits2d = self.lm_head(x2d)
+        logits = logits2d.view(B, T, self.config.vocab_size)
         
         # Calculate loss if targets provided
         loss = None
