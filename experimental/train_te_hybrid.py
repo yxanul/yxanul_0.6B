@@ -223,14 +223,34 @@ def train(config: TrainingConfig):
     print(f"Iterations: {config.max_iters}")
     print(f"Tokens per iteration: {config.batch_size * config.gradient_accumulation_steps * config.block_size:,}")
     print("-" * 50)
-    
+
     t0 = time.time()
     local_iter_num = 0
     training_active = True
+
+    # Runtime FP8 preflight: try a tiny forward pass under fp8_autocast
+    use_fp8 = True
+    try:
+        with torch.no_grad():
+            Xd = torch.randint(0, config.vocab_size, (2, min(64, config.block_size)), device=config.device)
+            Yd = Xd.clone()
+            with torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16):
+                with te.fp8_autocast(enabled=True, fp8_recipe=fp8_recipe, calibrating=True):
+                    _ = model(Xd, Yd)
+            torch.cuda.synchronize()
+        print("FP8 preflight succeeded; continuing with FP8.")
+    except RuntimeError as e:
+        if 'CUBLAS_STATUS_NOT_SUPPORTED' in str(e).upper():
+            print("FP8 preflight failed due to cuBLASLt NOT_SUPPORTED; falling back to BF16.")
+            use_fp8 = False
+        else:
+            print(f"FP8 preflight raised unexpected error: {e}")
+            print("Falling back to BF16 for safety.")
+            use_fp8 = False
     
     while iter_num < config.max_iters and training_active:
         # Determine if calibrating
-        calibrating = iter_num < config.fp8_calibration_steps
+        calibrating = use_fp8 and (iter_num < config.fp8_calibration_steps)
         
         # Evaluate periodically
         if iter_num % config.eval_interval == 0:
@@ -266,9 +286,13 @@ def train(config: TrainingConfig):
             for micro_step in range(config.gradient_accumulation_steps):
                 X, Y = get_batch('train', config)
                 
-                # Forward pass with FP8 HYBRID; ensure BF16 activations
-                with torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16):
-                    with te.fp8_autocast(enabled=True, fp8_recipe=fp8_recipe, calibrating=calibrating):
+                # Forward pass with FP8 HYBRID if available; else BF16
+                if use_fp8:
+                    with torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16):
+                        with te.fp8_autocast(enabled=True, fp8_recipe=fp8_recipe, calibrating=calibrating):
+                            logits, loss = model(X, Y)
+                else:
+                    with torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16):
                         logits, loss = model(X, Y)
                 
                 loss = loss / config.gradient_accumulation_steps
@@ -298,8 +322,8 @@ def train(config: TrainingConfig):
             tokens_per_iter = config.batch_size * config.gradient_accumulation_steps * config.block_size
             tokens_per_sec = tokens_per_iter * local_iter_num / dt
             
-            status = "[FP8-HYBRID]"
-            if calibrating:
+            status = "[FP8-HYBRID]" if use_fp8 else "[BF16]"
+            if use_fp8 and calibrating:
                 status += f" (calibrating)"
             
             print(f"iter {iter_num}: loss {loss.item()*config.gradient_accumulation_steps:.4f}, "
