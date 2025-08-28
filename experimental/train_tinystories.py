@@ -393,11 +393,11 @@ if __name__ == "__main__":
     # Create config
     # Adjust settings for SuperBPE's large vocabulary to avoid OOM
     if args.superbpe:
-        # Optimized for 24GB VRAM with 200k vocabulary
-        # We have room since only using 27% memory
-        batch_size = 48  # Increased from 16 (3x)
-        block_size = 128  # Back to original 128
-        gradient_accumulation_steps = 22  # Adjusted to maintain ~1024 effective batch
+        # Middle ground for 24GB VRAM with 200k vocabulary
+        # Balance between memory usage and performance
+        batch_size = 32  # Middle ground between 16 and 48
+        block_size = 128  # Keep original for good throughput
+        gradient_accumulation_steps = 32  # Maintain 1024 effective batch
     else:
         batch_size = 64
         block_size = 128
