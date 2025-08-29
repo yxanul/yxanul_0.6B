@@ -388,17 +388,39 @@ if __name__ == "__main__":
                        help='Rank for factorized embeddings (default: 128)')
     parser.add_argument('--superbpe', action='store_true',
                        help='Use SuperBPE tokenizer (40% fewer tokens)')
+    parser.add_argument('--data_dir', type=str, default=None,
+                       help='Custom data directory (e.g., data_textbooks_superbpe)')
+    parser.add_argument('--vocab_size', type=int, default=None,
+                       help='Custom vocabulary size (e.g., 200005 for SuperBPE)')
     args = parser.parse_args()
     
     # Create config
-    # Adjust settings for SuperBPE's large vocabulary to avoid OOM
-    if args.superbpe:
-        # Middle ground for 24GB VRAM with 200k vocabulary
-        # Balance between memory usage and performance
-        batch_size = 32  # Middle ground between 16 and 48
+    # Determine data directory and vocab size
+    if args.data_dir:
+        # Custom data directory specified
+        data_dir = args.data_dir
+        vocab_size = args.vocab_size if args.vocab_size else (200005 if 'superbpe' in args.data_dir else 50257)
+    elif args.superbpe:
+        # SuperBPE flag used
+        data_dir = 'data_superbpe'
+        vocab_size = 200005
+    else:
+        # Default GPT-2
+        data_dir = 'data'
+        vocab_size = 50257
+    
+    # Override vocab size if explicitly provided
+    if args.vocab_size:
+        vocab_size = args.vocab_size
+    
+    # Adjust settings for large vocabulary (200k) to avoid OOM
+    if vocab_size > 100000:
+        # Settings for large vocabulary (SuperBPE)
+        batch_size = 32  # Middle ground for 24GB VRAM
         block_size = 128  # Keep original for good throughput
         gradient_accumulation_steps = 32  # Maintain 1024 effective batch
     else:
+        # Settings for normal vocabulary (GPT-2)
         batch_size = 64
         block_size = 128
         gradient_accumulation_steps = 16
@@ -410,9 +432,9 @@ if __name__ == "__main__":
         wandb_run_name=args.wandb_run_name,
         use_factorized_embedding=args.factorized,
         embedding_rank=args.embedding_rank,
-        use_superbpe=args.superbpe,
-        data_dir='data_superbpe' if args.superbpe else 'data',
-        vocab_size=200005 if args.superbpe else 50257,  # SuperBPE has 200k vocab
+        use_superbpe=args.superbpe or vocab_size > 100000,
+        data_dir=data_dir,
+        vocab_size=vocab_size,
         batch_size=batch_size,
         block_size=block_size,
         gradient_accumulation_steps=gradient_accumulation_steps
