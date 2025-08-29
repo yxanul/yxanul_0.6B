@@ -197,71 +197,46 @@ def generate(model, tokenizer, prompt: str, max_tokens: int = 150, temperature: 
         return tokenizer.decode(full_tokens)
 
 def test_model(checkpoint_path: str):
-    """Test model with educational prompts."""
+    """Test model with interactive prompts only (optimized for tmux/SSH)."""
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     print(f"Using device: {device}\n")
     
     # Load model and get vocab size
     model, vocab_size = load_checkpoint(checkpoint_path, device)
     total_params = sum(p.numel() for p in model.parameters())
-    print(f"Model parameters: {total_params/1e6:.1f}M\n")
+    print(f"Model parameters: {total_params/1e6:.1f}M")
     
     # Load appropriate tokenizer
     tokenizer = load_tokenizer(vocab_size)
     
-    # Mixed test prompts: Educational, Math, and Code
-    test_prompts = [
-        # Educational content
-        "The main purpose of education is",
-        "When learning a new skill, you should",
-        "The scientific method consists of",
-        
-        # Mathematical reasoning
-        "To solve the equation 2x + 5 = 13, we",
-        "The area of a circle with radius r is",
-        "In mathematics, prime numbers are",
-        
-        # Python code
-        "def calculate_average(numbers):",
-        "To iterate through a list in Python, you can",
-        "# Function to check if a number is even",
-    ]
-    
-    print("=" * 60)
-    print("GENERATION TESTS - MIXED CONTENT (Educational/Math/Code)")
-    print("=" * 60)
-    
-    for i, prompt in enumerate(test_prompts, 1):
-        print(f"\n[{i}] Prompt: {prompt}")
-        print("-" * 40)
-        
-        # Generate with different temperatures
-        for temp in [0.7, 0.9]:
-            generated = generate(model, tokenizer, prompt, max_tokens=100, temperature=temp, top_k=40, device=device)
-            print(f"Temp {temp}: {generated}\n")
-    
-    # Interactive mode
+    # Jump straight to interactive mode for tmux/SSH usage
     print("\n" + "=" * 60)
-    print("INTERACTIVE MODE (type 'quit' to exit)")
+    print("INTERACTIVE MODE - MIXED MODEL (Educational/Math/Code)")
+    print("Temperature: 0.65 (conservative) | Top-k: 40")
     print("=" * 60)
-    print("Try prompts from different domains:")
-    print("  Educational: 'The steps to solve a problem are'")
-    print("  Mathematics: 'To find the derivative of x^2, we'")
-    print("  Python Code: 'import numpy as np'")
-    print("  Mixed: 'A database is used for'")
+    print("\nExample prompts to try:")
+    print("  Educational: 'The main purpose of education is'")
+    print("  Mathematics: '2 + 2 equals'")  # Simple test for accuracy
+    print("  Python Code: 'def hello_world():'")
+    print("  Mixed: 'To learn programming, you should'")
+    print("\nType 'quit' to exit\n")
     
     while True:
-        prompt = input("\nEnter prompt: ")
+        prompt = input(">>> ")
         if prompt.lower() in ['quit', 'exit', 'q']:
+            print("Goodbye!")
             break
         
         if not prompt.strip():
-            print("Please enter a prompt!")
             continue
         
-        print("\nGenerating...")
-        generated = generate(model, tokenizer, prompt, max_tokens=150, temperature=0.8, top_k=50, device=device)
-        print(f"\nGenerated: {generated}")
+        # Use conservative temperature for better quality
+        generated = generate(model, tokenizer, prompt, 
+                           max_tokens=150, 
+                           temperature=0.65,  # Lower for more coherent output
+                           top_k=40, 
+                           device=device)
+        print(f"\n{generated}\n")
 
 def main():
     import sys
