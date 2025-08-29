@@ -56,7 +56,7 @@ class TrainingConfig:
     compile: bool = False     # Torch compile (disable for now)
     
     # Logging
-    log_interval: int = 100
+    log_interval: int = 50  # More frequent logging for better monitoring
     checkpoint_interval: int = 5000
     checkpoint_dir: str = 'checkpoints_tinystories'
     wandb_project: str = 'tinystories-precision-test'
