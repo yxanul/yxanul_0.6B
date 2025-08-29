@@ -130,17 +130,28 @@ def estimate_loss(model: nn.Module, config: TrainingConfig) -> dict:
     return out
 
 def get_lr(iter_num: int, config: TrainingConfig) -> float:
-    """Learning rate schedule with warmup and cosine decay."""
-    # Warmup
+    """Learning rate schedule with warmup, plateau, and cosine decay.
+    
+    Schedule:
+    - 0 to warmup_iters: Linear warmup
+    - warmup_iters to 80% of max_iters: Constant at peak LR
+    - 80% to 100% of max_iters: Cosine decay to min_lr
+    """
+    # Warmup phase
     if iter_num < config.warmup_iters:
         return config.learning_rate * iter_num / config.warmup_iters
-    # Cosine decay
-    if iter_num > config.warmup_iters:
-        decay_ratio = (iter_num - config.warmup_iters) / (config.max_iters - config.warmup_iters)
-        assert 0 <= decay_ratio <= 1
-        coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio))
-        return config.min_lr + coeff * (config.learning_rate - config.min_lr)
-    return config.learning_rate
+    
+    # Plateau phase - maintain peak LR for most of training
+    plateau_end = int(0.8 * config.max_iters)
+    if iter_num < plateau_end:
+        return config.learning_rate
+    
+    # Cosine decay only in final 20%
+    decay_iters = config.max_iters - plateau_end
+    decay_ratio = (iter_num - plateau_end) / decay_iters
+    assert 0 <= decay_ratio <= 1
+    coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio))
+    return config.min_lr + coeff * (config.learning_rate - config.min_lr)
 
 # -----------------------------------------------------------------------------
 # Training
