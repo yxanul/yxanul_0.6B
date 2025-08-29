@@ -129,6 +129,52 @@ def estimate_loss(model: nn.Module, config: TrainingConfig) -> dict:
     model.train()
     return out
 
+def compute_layer_gradient_stats(model):
+    """Compute per-layer gradient statistics for monitoring."""
+    layer_stats = {}
+    
+    for name, param in model.named_parameters():
+        if param.grad is not None:
+            grad_norm = param.grad.data.norm(2).item()
+            grad_mean = param.grad.data.mean().item()
+            grad_std = param.grad.data.std().item()
+            
+            # Get layer type from name
+            if 'embed' in name:
+                layer_type = 'embedding'
+            elif 'ln' in name or 'norm' in name:
+                layer_type = 'norm'
+            elif 'attn' in name:
+                layer_type = 'attention'
+            elif 'ffn' in name or 'mlp' in name:
+                layer_type = 'ffn'
+            elif 'lm_head' in name:
+                layer_type = 'lm_head'
+            else:
+                layer_type = 'other'
+            
+            if layer_type not in layer_stats:
+                layer_stats[layer_type] = {
+                    'grad_norm': [],
+                    'grad_mean': [],
+                    'grad_std': []
+                }
+            
+            layer_stats[layer_type]['grad_norm'].append(grad_norm)
+            layer_stats[layer_type]['grad_mean'].append(grad_mean)
+            layer_stats[layer_type]['grad_std'].append(grad_std)
+    
+    # Average stats per layer type
+    avg_stats = {}
+    for layer_type, stats in layer_stats.items():
+        avg_stats[layer_type] = {
+            'grad_norm': sum(stats['grad_norm']) / len(stats['grad_norm']),
+            'grad_mean': sum(stats['grad_mean']) / len(stats['grad_mean']),
+            'grad_std': sum(stats['grad_std']) / len(stats['grad_std'])
+        }
+    
+    return avg_stats
+
 def get_lr(iter_num: int, config: TrainingConfig) -> float:
     """Learning rate schedule with warmup, plateau, and cosine decay.
     
@@ -277,10 +323,34 @@ def train(config: TrainingConfig):
             else:
                 loss.backward()
         
-        # Clip gradients
+        # Compute gradient statistics before clipping
+        grad_norm_before_clip = 0.0
+        param_norm = 0.0
+        update_norm = 0.0
+        num_params_with_grad = 0
+        
+        # Unscale gradients if using AMP
         if config.dtype == 'float16':
             scaler.unscale_(optimizer)
-        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+        
+        # Calculate gradient norm and parameter norm
+        for p in model.parameters():
+            if p.grad is not None:
+                grad_norm_before_clip += p.grad.data.norm(2).item() ** 2
+                param_norm += p.data.norm(2).item() ** 2
+                num_params_with_grad += 1
+        
+        grad_norm_before_clip = grad_norm_before_clip ** 0.5
+        param_norm = param_norm ** 0.5
+        
+        # Clip gradients and get the norm after clipping
+        grad_norm_after_clip = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0).item()
+        
+        # Check if clipping occurred
+        grad_clipped = grad_norm_after_clip < grad_norm_before_clip - 1e-6
+        
+        # Store old parameters to compute update norm
+        old_params = {name: p.data.clone() for name, p in model.named_parameters() if p.grad is not None}
         
         # Step optimizer
         if config.dtype == 'float16':
@@ -288,6 +358,16 @@ def train(config: TrainingConfig):
             scaler.update()
         else:
             optimizer.step()
+        
+        # Compute parameter update norm
+        for name, p in model.named_parameters():
+            if p.grad is not None and name in old_params:
+                update_norm += (p.data - old_params[name]).norm(2).item() ** 2
+        update_norm = update_norm ** 0.5
+        
+        # Compute update ratio
+        update_ratio = update_norm / (param_norm + 1e-8)
+        
         optimizer.zero_grad(set_to_none=True)
         
         # Logging
@@ -301,11 +381,33 @@ def train(config: TrainingConfig):
             avg_ms_per_iter = (dt / local_iter_num) * 1000.0
             print(f"iter {iter_num}: loss {loss.item()*config.gradient_accumulation_steps:.4f}, "
                   f"window {dt*1000:.2f}ms ({avg_ms_per_iter:.2f} ms/iter), {tokens_per_sec:.0f} tok/s, lr {lr:.2e}")
+            
+            # Log gradient statistics every 50 iterations for detailed monitoring
+            if iter_num % 50 == 0:
+                print(f"  grad_norm: {grad_norm_after_clip:.4f} (pre-clip: {grad_norm_before_clip:.4f}, clipped: {grad_clipped})")
+                print(f"  update_ratio: {update_ratio:.6f} (update_norm: {update_norm:.4f}, param_norm: {param_norm:.2f})")
+            
+            # Compute and log per-layer stats every 200 iterations
+            layer_grad_metrics = {}
+            if iter_num % 200 == 0 and iter_num > 0:
+                layer_stats = compute_layer_gradient_stats(model)
+                for layer_type, stats in layer_stats.items():
+                    print(f"  {layer_type}: grad_norm={stats['grad_norm']:.4f}, std={stats['grad_std']:.6f}")
+                    layer_grad_metrics[f'gradients/{layer_type}_norm'] = stats['grad_norm']
+                    layer_grad_metrics[f'gradients/{layer_type}_std'] = stats['grad_std']
+            
             wandb_logger.log_metrics({
                 'train/loss': loss.item() * config.gradient_accumulation_steps,
                 'train/lr': lr,
                 'train/tokens_per_sec': tokens_per_sec,
                 'train/avg_ms_per_iter': avg_ms_per_iter,
+                'gradients/norm_before_clip': grad_norm_before_clip,
+                'gradients/norm_after_clip': grad_norm_after_clip,
+                'gradients/clipped': float(grad_clipped),
+                'gradients/update_ratio': update_ratio,
+                'gradients/update_norm': update_norm,
+                'gradients/param_norm': param_norm,
+                **layer_grad_metrics  # Merge per-layer stats when available
             }, step=iter_num)
             t0 = time.time()
             local_iter_num = 0
