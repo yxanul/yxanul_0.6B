@@ -57,7 +57,7 @@ class TrainingConfig:
     
     # Logging
     log_interval: int = 50  # More frequent logging for better monitoring
-    checkpoint_interval: int = 5000
+    checkpoint_interval: int = 250  # Save checkpoints more frequently
     checkpoint_dir: str = 'checkpoints_tinystories'
     wandb_project: str = 'tinystories-precision-test'
     wandb_run_name: Optional[str] = None
