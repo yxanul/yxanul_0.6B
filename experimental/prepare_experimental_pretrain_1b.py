@@ -12,32 +12,31 @@ from pathlib import Path
 from transformers import AutoTokenizer
 import json
 from tqdm import tqdm
-import multiprocessing as mp
-from functools import partial
+# Removed multiprocessing - batch tokenization is faster!
 
-def tokenize_batch(texts, tokenizer_path):
-    """Tokenize a batch of texts using a fresh tokenizer instance."""
-    # Load tokenizer in each worker process
-    from transformers import AutoTokenizer
-    tokenizer = AutoTokenizer.from_pretrained(
-        str(tokenizer_path),
-        use_fast=True,
-        local_files_only=True
+def tokenize_batch_fast(texts, tokenizer, eos_token_id):
+    """Fast batch tokenization without multiprocessing overhead."""
+    all_tokens = []
+    
+    # Filter out empty texts
+    valid_texts = [text for text in texts if pd.notna(text) and len(text.strip()) > 0]
+    
+    if not valid_texts:
+        return all_tokens
+    
+    # Batch encode all texts at once - MUCH faster than individual encoding
+    # The tokenizer will handle batching internally with optimal performance
+    batch_encodings = tokenizer(
+        valid_texts,
+        add_special_tokens=False,
+        truncation=False,
+        padding=False,
+        return_attention_mask=False,
+        return_token_type_ids=False
     )
     
-    eos_token_id = tokenizer.eos_token_id
-    if eos_token_id is None:
-        eos_token_id = tokenizer.encode("<|endoftext|>", add_special_tokens=False)[0]
-    
-    all_tokens = []
-    for text in texts:
-        if pd.isna(text) or len(text.strip()) == 0:
-            continue
-        
-        # Tokenize the document
-        tokens = tokenizer.encode(text, add_special_tokens=False)
-        
-        # Add tokens and EOS separator
+    # Add each encoded text with EOS separator
+    for tokens in batch_encodings['input_ids']:
         all_tokens.extend(tokens)
         all_tokens.append(eos_token_id)
     
@@ -148,40 +147,32 @@ def prepare_dataset():
     texts = df['text'].tolist()
     print(f"Processing {len(texts):,} mixed documents (educational, math, code)...")
     
-    # Determine number of CPU cores to use
-    num_cores = mp.cpu_count()
-    # Use 75% of available cores to leave some for system
-    num_workers = max(1, int(num_cores * 0.75))
-    print(f"Using {num_workers} CPU cores for parallel tokenization (out of {num_cores} available)")
+    # FAST APPROACH: Single-threaded batch tokenization
+    # The tokenizer itself is optimized for batch processing
+    print("Using optimized batch tokenization (single-threaded, but MUCH faster)...")
     
     # Tokenize each document and add EOS token between them
     all_train_tokens = []
     
-    # Process in chunks for multiprocessing
-    chunk_size = 1000  # Documents per chunk
-    num_chunks = (len(texts) + chunk_size - 1) // chunk_size
+    # Process in larger batches for optimal speed
+    # Larger batches = better tokenizer efficiency
+    batch_size = 10000  # Process 10k documents at once
+    num_batches = (len(texts) + batch_size - 1) // batch_size
     
-    print(f"Processing in {num_chunks} chunks of up to {chunk_size} documents each...")
+    print(f"Processing in {num_batches} batches of up to {batch_size:,} documents each...")
+    print("This should take 5-10 minutes for 1B tokens...")
     
-    # Create a partial function with the tokenizer path
-    tokenize_func = partial(tokenize_batch, tokenizer_path=t80k_path)
-    
-    # Process with multiprocessing pool
-    with mp.Pool(num_workers) as pool:
-        for i in tqdm(range(0, len(texts), chunk_size), desc="Tokenizing documents", total=num_chunks):
-            batch = texts[i:min(i+chunk_size, len(texts))]
-            
-            # Split batch across workers
-            worker_batch_size = max(1, len(batch) // num_workers)
-            worker_batches = [batch[j:j+worker_batch_size] 
-                            for j in range(0, len(batch), worker_batch_size)]
-            
-            # Process in parallel
-            results = pool.map(tokenize_func, worker_batches)
-            
-            # Combine results
-            for tokens in results:
-                all_train_tokens.extend(tokens)
+    # Process with progress bar
+    for i in tqdm(range(0, len(texts), batch_size), desc="Tokenizing batches", total=num_batches):
+        batch = texts[i:min(i+batch_size, len(texts))]
+        
+        # Fast batch tokenization
+        tokens = tokenize_batch_fast(batch, tokenizer, eos_token_id)
+        all_train_tokens.extend(tokens)
+        
+        # Optional: Print progress stats every 10 batches
+        if (i // batch_size + 1) % 10 == 0:
+            print(f"  Processed {i+len(batch):,} documents, {len(all_train_tokens):,} tokens so far...")
     
     train_tokens = np.array(all_train_tokens, dtype=np.uint32)  # uint32 for vocab > 65k
     print(f"Total train tokens: {len(train_tokens):,} from {len(texts):,} documents")
@@ -221,7 +212,7 @@ def prepare_dataset():
         'avg_tokens_per_doc': avg_tokens,
         'eos_token_id': eos_token_id,
         'description': 'Mixed high-quality dataset: educational content, mathematical reasoning, Python code',
-        'num_workers_used': num_workers,
+        'processing_method': 'batch_tokenization_single_thread',
     }
     
     with open(output_dir / 'dataset_config.json', 'w') as f:
