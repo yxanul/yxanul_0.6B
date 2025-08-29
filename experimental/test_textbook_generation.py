@@ -134,7 +134,10 @@ def load_checkpoint(checkpoint_path: str, device: str = 'cuda'):
 
 @torch.no_grad()
 def generate(model, tokenizer, prompt: str, max_tokens: int = 150, temperature: float = 0.8, top_k: int = 50, device: str = 'cuda'):
-    """Generate text from prompt."""
+    """Generate text from prompt with sliding window for long sequences."""
+    
+    # Get block size from model config
+    block_size = model.config.block_size
     
     # Handle different tokenizer types
     if hasattr(tokenizer, 'encode'):
@@ -147,14 +150,25 @@ def generate(model, tokenizer, prompt: str, max_tokens: int = 150, temperature: 
     else:
         raise ValueError("Unknown tokenizer type")
     
+    # Truncate prompt if too long
+    if len(tokens) >= block_size:
+        print(f"Warning: Prompt too long ({len(tokens)} tokens), truncating to {block_size-1}")
+        tokens = tokens[-(block_size-1):]
+    
     x = torch.tensor(tokens, dtype=torch.long, device=device).unsqueeze(0)
     
     generated = []
     model.eval()
     
     for _ in range(max_tokens):
+        # Use sliding window if sequence exceeds block size
+        if x.size(1) >= block_size:
+            x_input = x[:, -block_size:]
+        else:
+            x_input = x
+        
         # Forward pass
-        logits, _ = model(x)
+        logits, _ = model(x_input)
         logits = logits[:, -1, :] / temperature
         
         # Top-k sampling
