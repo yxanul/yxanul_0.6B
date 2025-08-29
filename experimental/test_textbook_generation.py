@@ -209,20 +209,26 @@ def test_model(checkpoint_path: str):
     # Load appropriate tokenizer
     tokenizer = load_tokenizer(vocab_size)
     
-    # Educational test prompts (not stories!)
+    # Mixed test prompts: Educational, Math, and Code
     test_prompts = [
-        "A library catalog is",
-        "The main purpose of",
-        "To find information about",
+        # Educational content
+        "The main purpose of education is",
         "When learning a new skill, you should",
-        "The difference between",
-        "In mathematics, the concept of",
-        "Scientific research involves",
-        "The process of writing involves",
+        "The scientific method consists of",
+        
+        # Mathematical reasoning
+        "To solve the equation 2x + 5 = 13, we",
+        "The area of a circle with radius r is",
+        "In mathematics, prime numbers are",
+        
+        # Python code
+        "def calculate_average(numbers):",
+        "To iterate through a list in Python, you can",
+        "# Function to check if a number is even",
     ]
     
     print("=" * 60)
-    print("GENERATION TESTS - EDUCATIONAL CONTENT")
+    print("GENERATION TESTS - MIXED CONTENT (Educational/Math/Code)")
     print("=" * 60)
     
     for i, prompt in enumerate(test_prompts, 1):
@@ -238,10 +244,11 @@ def test_model(checkpoint_path: str):
     print("\n" + "=" * 60)
     print("INTERACTIVE MODE (type 'quit' to exit)")
     print("=" * 60)
-    print("Try educational prompts like:")
-    print("  - 'The steps to solve a problem are'")
-    print("  - 'A database is used for'")
-    print("  - 'Learning requires'")
+    print("Try prompts from different domains:")
+    print("  Educational: 'The steps to solve a problem are'")
+    print("  Mathematics: 'To find the derivative of x^2, we'")
+    print("  Python Code: 'import numpy as np'")
+    print("  Mixed: 'A database is used for'")
     
     while True:
         prompt = input("\nEnter prompt: ")
