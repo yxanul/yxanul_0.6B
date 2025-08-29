@@ -43,8 +43,8 @@ class TrainingConfig:
     max_iters: int = 10000    # ~10 epochs over TinyStories
     eval_interval: int = 200  # More frequent eval for better tracking   # Matches Reddit post
     eval_iters: int = 100      # Reasonable for quick eval
-    learning_rate: float = 1e-4  # Matches Reddit post
-    min_lr: float = 5e-5      # Matches Reddit post
+    learning_rate: float = 5e-4  # Increased for faster convergence (was 1e-4)
+    min_lr: float = 5e-5      # Keep same ratio (10x reduction)
     warmup_iters: int = 1000  # Matches Reddit post
     weight_decay: float = 0.1
     beta1: float = 0.9
@@ -392,6 +392,8 @@ if __name__ == "__main__":
                        help='Custom data directory (e.g., data_textbooks_superbpe)')
     parser.add_argument('--vocab_size', type=int, default=None,
                        help='Custom vocabulary size (e.g., 200005 for SuperBPE)')
+    parser.add_argument('--learning_rate', type=float, default=None,
+                       help='Learning rate (default: 5e-4, safe range: 1e-4 to 6e-4)')
     args = parser.parse_args()
     
     # Create config
@@ -437,7 +439,8 @@ if __name__ == "__main__":
         vocab_size=vocab_size,
         batch_size=batch_size,
         block_size=block_size,
-        gradient_accumulation_steps=gradient_accumulation_steps
+        gradient_accumulation_steps=gradient_accumulation_steps,
+        learning_rate=args.learning_rate if args.learning_rate else 5e-4
     )
     
     # Check if data exists
