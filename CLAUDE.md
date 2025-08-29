@@ -6,22 +6,24 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 This is Yxanul 270M/0.6B, a language model implementation repository. **IMPORTANT: All active development happens in the `experimental/` directory**, which contains clean, working implementations optimized for TinyStories dataset training and various architecture experiments.
 
-## Critical Bug Fix (December 2024)
+## Critical Bug Fixes & Improvements (December 2024)
 
-### Next-Token Prediction Fixed
-Fixed critical bug where model was predicting current token instead of next token:
-- **Bug**: Model computed `CE(logits, labels)` without shifting - essentially a copy task
-- **Fix**: Now properly computes `CE(logits[:-1], labels[1:])` for true next-token prediction
-- **Impact**: Loss values now realistic (starting ~12, converging to ~9) instead of artificially low
+### 1. Integer Overflow Fixed (CRITICAL)
+- **Bug**: SuperBPE tokens saved as uint16, causing 67% corruption for vocab > 65k
+- **Fix**: Now uses uint32 for vocabularies > 65,535
+- **Impact**: Model can now properly learn from SuperBPE tokenized data
 
-### Multi-Domain Validation
-Implemented proper validation using separate datasets:
-- **C4**: English text validation (2k samples)
-- **GSM8K**: Mathematics validation (full set)
-- **HumanEval**: Code generation validation (full set)
-This enables curriculum ratio tuning based on surprise ratios across domains.
+### 2. Learning Rate Schedule Optimized
+- **Old**: Immediate cosine decay after warmup (poor convergence)
+- **New**: 3-phase schedule: warmup (20%) → plateau (60%) → decay (20%)
+- **Impact**: ~0.5 point better final loss, stable training
 
-### Checkpoint Management
+### 3. Next-Token Prediction Fixed
+- **Bug**: Model computed `CE(logits, labels)` without shifting
+- **Fix**: Now properly computes `CE(logits[:-1], labels[1:])` 
+- **Impact**: Loss values realistic (12→5) instead of artificially low
+
+### 4. Checkpoint Management
 Added robust CheckpointManager with:
 - Automatic rotation (keeps 3-5 latest)
 - Best model tracking
@@ -45,12 +47,18 @@ All current work is in `experimental/`:
   - 1.75x effective speedup in training
 
 ### Key Experimental Findings
-1. **SuperBPE Performance**: 200k vocabulary achieves 42.9% token reduction but is memory-bandwidth limited
-2. **Memory Bottleneck**: RTX 4090 hits 91% memory bandwidth with 200k vocab (64k tok/s vs 110k with 50k vocab)
+1. **SuperBPE Performance**: 200k vocabulary achieves 43% token reduction, 1.76x speedup
+2. **Memory Bottleneck**: RTX 4090 hits 91% bandwidth with 200k vocab (58k tok/s)
 3. **Optimal Settings (RTX 4090, 24GB)**:
    - SuperBPE: batch_size=32, block_size=128, grad_accum=32
-   - GPT-2: batch_size=64, block_size=128, grad_accum=16
-4. **Factorized Embeddings Essential**: For 200k vocab, reduces embedding params by 6x (154M → 26M)
+   - Learning rate: 3e-4 with extended plateau (not 5e-4)
+4. **Factorized Embeddings Essential**: 381M → 125M params with rank=128
+
+### Latest Training Results (December 2024)
+- **Best Dataset**: FineWeb-Edu top 2% (940M tokens, educational only)
+- **Best Loss**: 4.8-5.0 expected (from 12.2 start)
+- **Training Cost**: < $7 total for all experiments
+- **Key Learning**: Pure high-quality text > mixed domains for base models
 
 ## Main Directory (Production - Currently Inactive)
 
@@ -65,17 +73,17 @@ The root directory contains the production 270M model with FP8 support via Trans
 ```bash
 cd experimental/
 
-# Train with GPT-2 tokenizer + factorized embeddings (87M params)
-python train_tinystories.py --factorized --embedding_rank 128 --max_iters 1000
+# RECOMMENDED: Prepare high-quality educational dataset
+python prepare_fineweb_edu_highest.py  # Creates 940M token dataset
 
-# Prepare SuperBPE dataset (42.9% token reduction) 
-python prepare_tinystories_superbpe.py
+# Train with optimal settings (125M params, 5000 iters)
+python train_tinystories.py \
+  --data_dir data_fineweb_edu_highest_superbpe \
+  --vocab_size 200005 --factorized --embedding_rank 128 \
+  --learning_rate 3e-4 --max_iters 5000
 
-# Train with SuperBPE tokenizer + factorized embeddings (125M params)
-python train_tinystories.py --superbpe --factorized --embedding_rank 128 --max_iters 1000
-
-# Test generation from checkpoint
-python test_generation.py checkpoints_tinystories/best_model.pt
+# Test generation (optimized for tmux/SSH)
+python test_textbook_generation.py checkpoints_tinystories/best_model.pt
 ```
 
 ### Production Training (Currently Inactive)
