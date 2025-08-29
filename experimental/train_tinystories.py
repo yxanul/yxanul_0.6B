@@ -71,18 +71,21 @@ class TrainingConfig:
 _TRAIN_MM = None
 _VAL_MM = None
 
-def _get_memmap(split: str, data_dir: Path) -> np.memmap:
+def _get_memmap(split: str, data_dir: Path, vocab_size: int = 50257) -> np.memmap:
     global _TRAIN_MM, _VAL_MM
+    # CRITICAL FIX: Use uint32 for vocabularies > 65535 (uint16 max)
+    dtype = np.uint32 if vocab_size > 65535 else np.uint16
+    
     if split == 'train':
         if _TRAIN_MM is None:
-            _TRAIN_MM = np.memmap(data_dir / 'train.bin', dtype=np.uint16, mode='r')
+            _TRAIN_MM = np.memmap(data_dir / 'train.bin', dtype=dtype, mode='r')
         return _TRAIN_MM
     else:
         if _VAL_MM is None:
             val_path = data_dir / 'val.bin'
             if not val_path.exists():
                 val_path = data_dir / 'validation.bin'
-            _VAL_MM = np.memmap(val_path, dtype=np.uint16, mode='r')
+            _VAL_MM = np.memmap(val_path, dtype=dtype, mode='r')
         return _VAL_MM
 
 
@@ -90,7 +93,7 @@ def get_batch(split: str, config: TrainingConfig, data_dir: Path = None) -> Tupl
     """Get a batch of data from memory-mapped dataset."""
     if data_dir is None:
         data_dir = Path(config.data_dir)
-    data = _get_memmap('train' if split == 'train' else 'val', data_dir)
+    data = _get_memmap('train' if split == 'train' else 'val', data_dir, config.vocab_size)
     
     # Generate random positions
     ix = torch.randint(len(data) - config.block_size, (config.batch_size,))

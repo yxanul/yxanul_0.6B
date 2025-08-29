@@ -137,7 +137,8 @@ def prepare_dataset():
     
     # Save training data
     train_output = output_dir / 'train.bin'
-    train_tokens.astype(np.uint16).tofile(train_output)
+    # CRITICAL: Use uint32 for SuperBPE (vocab=200k > uint16 max=65k)
+    train_tokens.astype(np.uint32).tofile(train_output)
     print(f"Saved to {train_output}")
     
     # Process validation data
@@ -176,7 +177,8 @@ def prepare_dataset():
     
     # Save validation data
     val_output = output_dir / 'val.bin'
-    val_tokens.astype(np.uint16).tofile(val_output)
+    # CRITICAL: Use uint32 for SuperBPE (vocab=200k > uint16 max=65k)
+    val_tokens.astype(np.uint32).tofile(val_output)
     print(f"Saved to {val_output}")
     
     # Save tokenizer config for reference

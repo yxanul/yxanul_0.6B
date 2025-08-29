@@ -138,7 +138,7 @@ def prepare_dataset():
             all_train_tokens.extend(tokens)
             all_train_tokens.append(eos_token_id)
     
-    train_tokens = np.array(all_train_tokens, dtype=np.uint32)
+    train_tokens = np.array(all_train_tokens, dtype=np.uint32)  # uint32 for vocab > 65k
     print(f"Total train tokens: {len(train_tokens):,} from {len(texts):,} documents")
     
     # Calculate average tokens per document
@@ -155,12 +155,14 @@ def prepare_dataset():
     
     # Save training data
     train_output = output_dir / 'train.bin'
-    train_tokens.astype(np.uint16).tofile(train_output)
+    # CRITICAL: Use uint32 for SuperBPE (vocab=200k > uint16 max=65k)
+    train_tokens.astype(np.uint32).tofile(train_output)
     print(f"Saved training data to {train_output}")
     
     # Save validation data
     val_output = output_dir / 'val.bin'
-    val_tokens.astype(np.uint16).tofile(val_output)
+    # CRITICAL: Use uint32 for SuperBPE (vocab=200k > uint16 max=65k)
+    val_tokens.astype(np.uint32).tofile(val_output)
     print(f"Saved validation data to {val_output}")
     
     # Save tokenizer config for reference
