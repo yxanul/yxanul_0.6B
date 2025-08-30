@@ -56,8 +56,8 @@ class TrainingConfig:
     compile: bool = False     # Torch compile (disable for now)
     
     # Logging
-    log_interval: int = 50  # More frequent logging for better monitoring
-    checkpoint_interval: int = 250  # Save checkpoints more frequently
+    log_interval: int = 200  # Reduced frequency to minimize overhead
+    checkpoint_interval: int = 500  # Less frequent checkpoints for performance
     checkpoint_dir: str = 'checkpoints_tinystories'
     wandb_project: str = 'tinystories-precision-test'
     wandb_run_name: Optional[str] = None
@@ -273,8 +273,8 @@ def train(config: TrainingConfig):
     
     # Compile model if requested
     if config.compile:
-        print("Compiling model...")
-        model = torch.compile(model)
+        print("Compiling model with max-autotune (takes ~60s but worth it)...")
+        model = torch.compile(model, mode="max-autotune", fullgraph=True)
     
     # Training loop
     best_val_loss = float('inf')
@@ -389,14 +389,14 @@ def train(config: TrainingConfig):
             print(f"iter {iter_num}: loss {loss.item()*config.gradient_accumulation_steps:.4f}, "
                   f"window {dt*1000:.2f}ms ({avg_ms_per_iter:.2f} ms/iter), {tokens_per_sec:.0f} tok/s, lr {lr:.2e}")
             
-            # Log gradient statistics every 50 iterations for detailed monitoring
-            if iter_num % 50 == 0:
+            # Log gradient statistics less frequently to reduce overhead
+            if iter_num % 500 == 0 and iter_num > 0:  # Much less frequent
                 print(f"  grad_norm: {grad_norm_after_clip:.4f} (pre-clip: {grad_norm_before_clip:.4f}, clipped: {grad_clipped})")
                 print(f"  update_ratio: {update_ratio:.6f} (update_norm: {update_norm:.4f}, param_norm: {param_norm:.2f})")
             
-            # Compute and log per-layer stats every 200 iterations
+            # Compute and log per-layer stats rarely (expensive operation)
             layer_grad_metrics = {}
-            if iter_num % 200 == 0 and iter_num > 0:
+            if iter_num % 1000 == 0 and iter_num > 0:  # Very rare - only for debugging
                 layer_stats = compute_layer_gradient_stats(model)
                 for layer_type, stats in layer_stats.items():
                     print(f"  {layer_type}: grad_norm={stats['grad_norm']:.4f}, std={stats['grad_std']:.6f}")
@@ -419,7 +419,7 @@ def train(config: TrainingConfig):
             t0 = time.time()
             local_iter_num = 0
         
-        # Save checkpoint periodically
+        # Save checkpoint periodically (less frequent for performance)
         if iter_num % config.checkpoint_interval == 0 and iter_num > 0:
             checkpoint = {
                 'model': model.state_dict(),
