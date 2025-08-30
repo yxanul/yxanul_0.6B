@@ -331,34 +331,27 @@ def train(config: TrainingConfig):
             else:
                 loss.backward()
         
-        # Compute gradient statistics before clipping
-        grad_norm_before_clip = 0.0
-        param_norm = 0.0
-        update_norm = 0.0
-        num_params_with_grad = 0
-        
         # Unscale gradients if using AMP
         if config.dtype == 'float16':
             scaler.unscale_(optimizer)
         
-        # Calculate gradient norm and parameter norm
-        for p in model.parameters():
-            if p.grad is not None:
-                grad_norm_before_clip += p.grad.data.norm(2).item() ** 2
-                param_norm += p.data.norm(2).item() ** 2
-                num_params_with_grad += 1
+        # Clip gradients - returns the ORIGINAL norm (before clipping)
+        total_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), config.grad_clip).item()
         
-        grad_norm_before_clip = grad_norm_before_clip ** 0.5
-        param_norm = param_norm ** 0.5
+        # Check if clipping actually occurred
+        grad_clipped = total_norm > config.grad_clip
         
-        # Clip gradients and get the norm after clipping
-        grad_norm_after_clip = torch.nn.utils.clip_grad_norm_(model.parameters(), config.grad_clip).item()
-        
-        # Check if clipping occurred
-        grad_clipped = grad_norm_after_clip < grad_norm_before_clip - 1e-6
+        # Compute parameter norm (only for logging update ratio)
+        param_norm = 0.0
+        update_norm = 0.0
         
         # Store old parameters to compute update norm
-        old_params = {name: p.data.clone() for name, p in model.named_parameters() if p.grad is not None}
+        old_params = {}
+        for name, p in model.named_parameters():
+            if p.grad is not None:
+                param_norm += p.data.norm(2).item() ** 2
+                old_params[name] = p.data.clone()
+        param_norm = param_norm ** 0.5
         
         # Step optimizer
         if config.dtype == 'float16':
@@ -392,7 +385,7 @@ def train(config: TrainingConfig):
             
             # Log gradient statistics less frequently to reduce overhead
             if iter_num % 500 == 0 and iter_num > 0:  # Much less frequent
-                print(f"  grad_norm: {grad_norm_after_clip:.4f} (pre-clip: {grad_norm_before_clip:.4f}, clipped: {grad_clipped})")
+                print(f"  grad_norm: {total_norm:.4f} (clipped: {grad_clipped})")
                 print(f"  update_ratio: {update_ratio:.6f} (update_norm: {update_norm:.4f}, param_norm: {param_norm:.2f})")
             
             # Compute and log per-layer stats rarely (expensive operation)
@@ -409,8 +402,7 @@ def train(config: TrainingConfig):
                 'train/lr': lr,
                 'train/tokens_per_sec': tokens_per_sec,
                 'train/avg_ms_per_iter': avg_ms_per_iter,
-                'gradients/norm_before_clip': grad_norm_before_clip,
-                'gradients/norm_after_clip': grad_norm_after_clip,
+                'gradients/total_norm': total_norm,
                 'gradients/clipped': float(grad_clipped),
                 'gradients/update_ratio': update_ratio,
                 'gradients/update_norm': update_norm,
