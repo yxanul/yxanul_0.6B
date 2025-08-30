@@ -46,6 +46,7 @@ class TrainingConfig:
     learning_rate: float = 3e-3  # Proven stable, 3x faster convergence
     min_lr: float = 3e-4      # Keep same ratio (10x reduction)
     warmup_iters: int = 1000  # Matches Reddit post
+    grad_clip: float = 1.0    # Gradient clipping threshold
     weight_decay: float = 0.1
     beta1: float = 0.9
     beta2: float = 0.999
@@ -351,7 +352,7 @@ def train(config: TrainingConfig):
         param_norm = param_norm ** 0.5
         
         # Clip gradients and get the norm after clipping
-        grad_norm_after_clip = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0).item()
+        grad_norm_after_clip = torch.nn.utils.clip_grad_norm_(model.parameters(), config.grad_clip).item()
         
         # Check if clipping occurred
         grad_clipped = grad_norm_after_clip < grad_norm_before_clip - 1e-6
@@ -523,6 +524,8 @@ if __name__ == "__main__":
                        help='Batch size (default: auto-selected based on vocab, recommended: 64 for A100)')
     parser.add_argument('--gradient_accumulation_steps', type=int, default=None,
                        help='Gradient accumulation steps (default: 16-32 based on vocab)')
+    parser.add_argument('--grad_clip', type=float, default=None,
+                       help='Gradient clipping value (default: 1.0, use 0.5 if unstable)')
     args = parser.parse_args()
     
     # Create config
@@ -569,7 +572,8 @@ if __name__ == "__main__":
         batch_size=batch_size,
         block_size=block_size,
         gradient_accumulation_steps=gradient_accumulation_steps,
-        learning_rate=args.learning_rate if args.learning_rate else 3e-3  # Default to proven stable 3e-3
+        learning_rate=args.learning_rate if args.learning_rate else 3e-3,  # Default to proven stable 3e-3
+        grad_clip=args.grad_clip if args.grad_clip else 1.0  # Default 1.0, use 0.5 if unstable
     )
     
     # Check if data exists
