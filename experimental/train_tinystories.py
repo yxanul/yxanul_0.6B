@@ -90,22 +90,29 @@ def _get_memmap(split: str, data_dir: Path, vocab_size: int = 50257) -> np.memma
 
 
 def get_batch(split: str, config: TrainingConfig, data_dir: Path = None) -> Tuple[torch.Tensor, torch.Tensor]:
-    """Get a batch of data from memory-mapped dataset."""
+    """Get a batch of data from memory-mapped dataset - OPTIMIZED VERSION."""
     if data_dir is None:
         data_dir = Path(config.data_dir)
     data = _get_memmap('train' if split == 'train' else 'val', data_dir, config.vocab_size)
     
     # Generate random positions
-    ix = torch.randint(len(data) - config.block_size, (config.batch_size,))
+    ix = torch.randint(len(data) - config.block_size - 1, (config.batch_size,))
     
-    # Create batch
-    x = torch.stack([torch.from_numpy((data[i:i+config.block_size]).astype(np.int64)) for i in ix])
-    y = torch.stack([torch.from_numpy((data[i+1:i+1+config.block_size]).astype(np.int64)) for i in ix])
+    # VECTORIZED: Create all indices at once
+    offsets = torch.arange(config.block_size + 1)
+    indices = ix.unsqueeze(1) + offsets.unsqueeze(0)  # [batch_size, block_size + 1]
     
-    # Move to device
+    # Fetch all data in one operation
+    batch_data = torch.from_numpy(data[indices.numpy()].astype(np.int64))
+    
+    # Split into x and y
+    x = batch_data[:, :-1]  # [batch_size, block_size]
+    y = batch_data[:, 1:]   # [batch_size, block_size]
+    
+    # Move to device (no pin_memory after creation - that's wrong)
     if config.device.startswith('cuda'):
-        x = x.pin_memory().to(config.device, non_blocking=True)
-        y = y.pin_memory().to(config.device, non_blocking=True)
+        x = x.to(config.device, non_blocking=True)
+        y = y.to(config.device, non_blocking=True)
     else:
         x, y = x.to(config.device), y.to(config.device)
     return x, y
