@@ -335,7 +335,11 @@ class SimpleGPT_TE(nn.Module):
 def load_from_bfloat16_checkpoint(model, checkpoint_path):
     """Load BF16 checkpoint into FP8 model."""
     print(f"Loading BF16 checkpoint from {checkpoint_path}")
-    checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
+    try:
+        checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
+    except TypeError:
+        # Older PyTorch versions don't support weights_only
+        checkpoint = torch.load(checkpoint_path, map_location='cpu')
     
     if 'model' in checkpoint:
         state_dict = checkpoint['model']

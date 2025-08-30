@@ -112,10 +112,12 @@ class DataLoader:
         # Vectorized data loading
         offsets = torch.arange(self.block_size + 1)
         indices = ix.unsqueeze(1) + offsets.unsqueeze(0)
-        batch_data = torch.from_numpy(data[indices.numpy()].astype(np.int64))
+        # Pin memory for faster CPU->GPU transfer
+        batch_data = torch.from_numpy(data[indices.numpy()].astype(np.int64)).pin_memory()
         
-        x = batch_data[:, :-1].to(self.device)
-        y = batch_data[:, 1:].to(self.device)
+        # Non-blocking transfer for better overlap
+        x = batch_data[:, :-1].to(self.device, non_blocking=True)
+        y = batch_data[:, 1:].to(self.device, non_blocking=True)
         
         return x, y
 
@@ -167,8 +169,11 @@ def evaluate(model, data_loader, config, fp8_recipe):
 
 def save_checkpoint(model, optimizer, config, iter_num, val_loss, checkpoint_path):
     """Save model checkpoint with FP8 metadata."""
+    # Get raw model state dict (unwrap compiled model if needed)
+    model_to_save = model._orig_mod if hasattr(model, '_orig_mod') else model
+    
     checkpoint = {
-        'model': model.state_dict(),
+        'model': model_to_save.state_dict(),
         'optimizer': optimizer.state_dict(),
         'config': asdict(config),
         'iter_num': iter_num,
@@ -239,8 +244,18 @@ def train():
             print(f"Resumed from BF16 checkpoint at iteration {iter_num}")
         else:
             # Loading from FP8 checkpoint
-            checkpoint = torch.load(config.resume_from, map_location='cpu')
-            model.load_state_dict(checkpoint['model'])
+            try:
+                checkpoint = torch.load(config.resume_from, map_location='cpu', weights_only=False)
+            except TypeError:
+                checkpoint = torch.load(config.resume_from, map_location='cpu')
+            
+            state_dict = checkpoint['model']
+            # Handle compiled model prefix if present
+            if any(k.startswith('_orig_mod.') for k in state_dict.keys()):
+                print("Removing _orig_mod prefix from checkpoint")
+                state_dict = {k.replace('_orig_mod.', ''): v for k, v in state_dict.items()}
+            
+            model.load_state_dict(state_dict)
             iter_num = checkpoint.get('iter_num', 0)
             best_val_loss = checkpoint.get('best_val_loss', float('inf'))
             print(f"Resumed from FP8 checkpoint at iteration {iter_num}")
@@ -317,9 +332,11 @@ def train():
                 with torch.cuda.amp.autocast(dtype=torch.bfloat16):
                     logits, loss = model(x, y)
             
+            # Store unscaled loss for accurate logging
+            total_loss += loss.item()
+            
             # Scale loss for gradient accumulation
             loss = loss / config.gradient_accumulation_steps
-            total_loss += loss.item()
             
             # Backward pass (outside FP8 autocast)
             loss.backward()
@@ -341,12 +358,14 @@ def train():
             dt = t1 - t0
             tokens_per_sec = tokens_processed / dt if dt > 0 else 0
             
-            print(f"iter {iter_num}: loss {total_loss:.4f}, lr {lr:.2e}, "
+            # Note: total_loss is the sum of unscaled losses, already averaged over accumulation steps
+            avg_loss = total_loss / config.gradient_accumulation_steps
+            print(f"iter {iter_num}: loss {avg_loss:.4f}, lr {lr:.2e}, "
                   f"{tokens_per_sec/1e3:.1f}k tok/s, FP8: {use_fp8_now}")
             
             if WANDB_AVAILABLE:
                 wandb.log({
-                    'train/loss': total_loss,
+                    'train/loss': total_loss / config.gradient_accumulation_steps,
                     'train/lr': lr,
                     'train/tokens_per_sec': tokens_per_sec,
                     'train/grad_norm': grad_norm.item() if config.grad_clip > 0 else 0,
@@ -373,10 +392,11 @@ def train():
                     Path(config.checkpoint_dir) / 'best_model_fp8.pt'
                 )
         
-        # Regular checkpoints (use last_val_loss)
+        # Regular checkpoints (use best_val_loss if no eval ran yet)
         if iter_num % config.checkpoint_interval == 0 and iter_num > 0:
+            checkpoint_val_loss = last_val_loss if last_val_loss != float('inf') else best_val_loss
             save_checkpoint(
-                model, optimizer, config, iter_num, last_val_loss,
+                model, optimizer, config, iter_num, checkpoint_val_loss,
                 Path(config.checkpoint_dir) / f'checkpoint_{iter_num}_fp8.pt'
             )
     
