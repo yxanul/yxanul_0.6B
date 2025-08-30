@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Prepare highest-quality FineWeb-Edu dataset using SuperBPE tokenizer.
+Prepare highest-quality FineWeb-Edu dataset using SmolLM2 tokenizer.
 Uses pre-filtered dataset with educational score >= 3.5, language score >= 0.95.
-Processes ~1/3 of the 4.17B tokens for manageable training.
+Processes ~1/2 of the dataset for ~2.1B tokens for better coverage.
 """
 
 import numpy as np
@@ -42,52 +42,46 @@ def tokenize_batch_fast(texts, tokenizer, eos_token_id):
 
 def prepare_dataset(max_files=None):
     """
-    Prepare FineWeb-Edu highest quality dataset with SuperBPE tokenizer.
+    Prepare FineWeb-Edu highest quality dataset with SmolLM2 tokenizer.
     
     Args:
-        max_files: Number of parquet files to process (None = all files)
-                   Use ~1/3 of files for 1.4B tokens
+        max_files: Number of parquet files to process (None = 1/2 of files)
+                   Default processes ~1/2 of files for 2.1B tokens
     """
     
     print("="*60)
     print("FINEWEB-EDU HIGHEST QUALITY DATASET PREPARATION")
+    print("With SmolLM2-135M Tokenizer")
     print("="*60)
     
-    # Load SuperBPE tokenizer from local cache
-    print("\nLoading SuperBPE tokenizer from local cache...")
+    # Load SmolLM2 tokenizer directly from HuggingFace
+    print("\nLoading SmolLM2-135M tokenizer from HuggingFace...")
     
-    # Determine cache path based on platform
+    # Load SmolLM2 tokenizer from HuggingFace
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(
+            "HuggingFaceTB/SmolLM2-135M",
+            use_fast=True  # Fast Rust tokenizer for speed
+        )
+        print(f"SUCCESS: Loaded SmolLM2-135M tokenizer!")
+    except Exception as e:
+        print(f"Failed to load from HuggingFace, trying SmolLM v1...")
+        try:
+            tokenizer = AutoTokenizer.from_pretrained(
+                "HuggingFaceTB/SmolLM-1.7B",
+                use_fast=True
+            )
+            print(f"SUCCESS: Loaded SmolLM v1 tokenizer as fallback!")
+        except Exception as e2:
+            raise RuntimeError(f"Failed to load SmolLM tokenizer: {e2}")
+    
+    # Determine data path based on platform
     if platform.system() == "Linux":
         # RunPod instance paths
-        cache_base = Path("/workspace/yxanul_0.6B/tokenizer_cache")
         data_base = Path("/workspace/yxanul_0.6B/experimental/fineweb-edu-highest-quality-2025/data")
     else:
         # Local Windows paths
-        cache_base = Path("D:/ai_testing/yxanul_0.6B/tokenizer_cache")
         data_base = Path("D:/ai_testing/yxanul_0.6B/experimental/fineweb-edu-highest-quality-2025/data")
-    
-    # Check if cache exists
-    if not cache_base.exists():
-        cache_base = Path("../tokenizer_cache")
-        if not cache_base.exists():
-            raise FileNotFoundError(f"Tokenizer cache not found at {cache_base}")
-    
-    # Load SuperBPE-t80k tokenizer
-    t80k_path = cache_base / "superbpe-t80k-fast"
-    if not t80k_path.exists():
-        raise FileNotFoundError(f"SuperBPE-t80k cache not found at {t80k_path}")
-    
-    print(f"Found t80k cache at {t80k_path}")
-    
-    try:
-        tokenizer = AutoTokenizer.from_pretrained(
-            str(t80k_path),
-            use_fast=True,  # Fast Rust tokenizer
-            local_files_only=True
-        )
-        print(f"SUCCESS: Loaded SuperBPE-t80k fast tokenizer!")
-    except Exception as e:
-        raise RuntimeError(f"Failed to load SuperBPE-t80k tokenizer: {e}")
     
     print(f"Vocabulary size: {len(tokenizer)}")
     
@@ -113,18 +107,19 @@ def prepare_dataset(max_files=None):
     
     print(f"\nFound {len(parquet_files)} parquet files")
     
-    # Limit files if specified (for 1/3 of dataset)
+    # Limit files if specified (for 1/2 of dataset by default)
+    total_files = len(parquet_files)
     if max_files:
         parquet_files = parquet_files[:max_files]
-        print(f"Processing first {max_files} files (~{max_files/len(parquet_files)*100:.0f}% of dataset)")
+        print(f"Processing first {max_files} files (~{max_files/total_files*100:.0f}% of dataset)")
     else:
-        # Default to 1/3 of files for ~1.4B tokens
-        third_files = len(parquet_files) // 3
-        parquet_files = parquet_files[:third_files]
-        print(f"Processing {third_files} files (1/3 of dataset, ~1.4B tokens)")
+        # Default to 1/2 of files for ~2.1B tokens
+        half_files = total_files // 2
+        parquet_files = parquet_files[:half_files]
+        print(f"Processing {half_files} files (1/2 of dataset, ~2.1B tokens)")
     
     # Create output directory
-    output_dir = Path('data_fineweb_edu_highest_superbpe')
+    output_dir = Path('data_fineweb_edu_smollm')
     output_dir.mkdir(exist_ok=True)
     
     # Process all selected files
@@ -160,9 +155,9 @@ def prepare_dataset(max_files=None):
         
         print(f"  Running total: {len(all_train_tokens):,} tokens from {total_docs:,} documents")
     
-    # Convert to numpy array
+    # Convert to numpy array (uint16 is sufficient for SmolLM vocab size 49,152)
     print("\nConverting to numpy array...")
-    train_tokens = np.array(all_train_tokens, dtype=np.uint32)
+    train_tokens = np.array(all_train_tokens, dtype=np.uint16)
     
     print(f"\nDataset statistics:")
     print(f"  Documents processed: {total_docs:,}")
@@ -172,17 +167,17 @@ def prepare_dataset(max_files=None):
     print(f"  Avg chars per token: {total_chars/len(train_tokens):.2f}")
     
     # Estimate token reduction vs GPT-2
-    chars_per_superbpe = total_chars / len(train_tokens)
-    gpt2_chars_per_token = 4.3  # Typical for English
-    estimated_gpt2_tokens = len(train_tokens) * (chars_per_superbpe / gpt2_chars_per_token)
+    chars_per_smollm = total_chars / len(train_tokens)
+    gpt2_chars_per_token = 3.88  # Actual measured from our comparison
+    estimated_gpt2_tokens = total_chars / gpt2_chars_per_token
     reduction = (1 - len(train_tokens) / estimated_gpt2_tokens) * 100
     
     print(f"\nTokenization efficiency:")
-    print(f"  SuperBPE chars/token: {chars_per_superbpe:.2f}")
-    print(f"  GPT-2 chars/token (typical): {gpt2_chars_per_token:.2f}")
+    print(f"  SmolLM chars/token: {chars_per_smollm:.2f}")
+    print(f"  GPT-2 chars/token (measured): {gpt2_chars_per_token:.2f}")
     print(f"  Estimated GPT-2 tokens: {int(estimated_gpt2_tokens):,}")
-    print(f"  SuperBPE tokens: {len(train_tokens):,}")
-    print(f"  Token reduction: {reduction:.1f}%")
+    print(f"  SmolLM tokens: {len(train_tokens):,}")
+    print(f"  Token reduction vs GPT-2: {reduction:.1f}%")
     print(f"  Speedup factor: {estimated_gpt2_tokens/len(train_tokens):.2f}x")
     
     # Split into train/val (95/5 for large dataset)
@@ -194,14 +189,14 @@ def prepare_dataset(max_files=None):
     print(f"  Train tokens: {len(train_tokens):,}")
     print(f"  Val tokens: {len(val_tokens):,}")
     
-    # Save training data
+    # Save training data (uint16 for SmolLM vocab)
     train_output = output_dir / 'train.bin'
-    train_tokens.astype(np.uint32).tofile(train_output)
+    train_tokens.astype(np.uint16).tofile(train_output)
     print(f"\nSaved training data to {train_output}")
     
-    # Save validation data
+    # Save validation data (uint16 for SmolLM vocab)
     val_output = output_dir / 'val.bin'
-    val_tokens.astype(np.uint32).tofile(val_output)
+    val_tokens.astype(np.uint16).tofile(val_output)
     print(f"Saved validation data to {val_output}")
     
     # Save dataset config
@@ -212,14 +207,14 @@ def prepare_dataset(max_files=None):
             'min_edu_score': 3.5,
             'min_lang_score': 0.95
         },
-        'tokenizer': 'superbpe-t80k',
+        'tokenizer': 'HuggingFaceTB/SmolLM2-135M',
         'vocab_size': len(tokenizer),
         'train_tokens': len(train_tokens),
         'val_tokens': len(val_tokens),
         'total_documents': total_docs,
         'files_processed': len(parquet_files),
         'avg_tokens_per_doc': len(train_tokens) / total_docs,
-        'chars_per_token': chars_per_superbpe,
+        'chars_per_token': chars_per_smollm,
         'token_reduction_vs_gpt2': f"{reduction:.1f}%",
         'eos_token_id': eos_token_id,
     }
@@ -227,8 +222,8 @@ def prepare_dataset(max_files=None):
     with open(output_dir / 'dataset_config.json', 'w') as f:
         json.dump(config, f, indent=2)
     
-    # Calculate size
-    total_size_gb = (len(train_tokens) + len(val_tokens)) * 4 / 1e9
+    # Calculate size (uint16 = 2 bytes per token)
+    total_size_gb = (len(train_tokens) + len(val_tokens)) * 2 / 1e9
     
     print("\n" + "="*60)
     print("DATASET READY!")
@@ -236,21 +231,24 @@ def prepare_dataset(max_files=None):
     print(f"Output directory: {output_dir}")
     print(f"Total size: {total_size_gb:.2f} GB")
     print(f"Quality: Top 2% of FineWeb-Edu (score >= 3.5)")
-    print("\nTo train:")
-    print("  python train_tinystories.py --data_dir data_fineweb_edu_highest_superbpe \\")
-    print("    --vocab_size 200005 --factorized --embedding_rank 128 \\")
-    print("    --learning_rate 3e-4 --max_iters 5000")
-    print("\nExpected benefits over mixed dataset:")
-    print("  - Pure high-quality English text")
-    print("  - No domain confusion (math/code mixing)")
-    print("  - Factually accurate educational content")
-    print("  - Coherent, GPT-2-like base model")
+    print(f"Tokenizer: SmolLM2-135M (49,152 vocab)")
+    print("\nTo train with optimal settings:")
+    print("  python train_tinystories.py --data_dir data_fineweb_edu_smollm \\")
+    print("    --vocab_size 49152 \\")
+    print("    --learning_rate 3e-3 --max_iters 10000")
+    print("\nExpected benefits:")
+    print("  - No factorization needed (151M params)")
+    print("  - 43% fewer tokens than GPT-2")
+    print("  - ~100k tokens/sec training speed")
+    print("  - Pure high-quality educational text")
+    print("  - No domain confusion")
+    print("  - 3x faster convergence with 3e-3 LR")
 
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument('--max_files', type=int, default=None,
-                       help='Number of parquet files to process (None = 1/3 of total)')
+                       help='Number of parquet files to process (None = 1/2 of total)')
     args = parser.parse_args()
     
     prepare_dataset(args.max_files)

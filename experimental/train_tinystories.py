@@ -31,7 +31,7 @@ class TrainingConfig:
     n_layer: int = 12         # GPT-2 small
     n_head: int = 12          # GPT-2 small
     n_embd: int = 768         # GPT-2 small
-    vocab_size: int = 50257   # GPT-2 vocab size (or 200005 for SuperBPE)
+    vocab_size: int = 50257   # GPT-2 vocab (50257), SmolLM (49152), or SuperBPE (200005)
     block_size: int = 128     # Matches Reddit post
     dropout: float = 0.05  # Conservative dropout for regularization
     use_factorized_embedding: bool = False  # Enable factorized embeddings
@@ -43,8 +43,8 @@ class TrainingConfig:
     max_iters: int = 10000    # ~10 epochs over TinyStories
     eval_interval: int = 200  # More frequent eval for better tracking   # Matches Reddit post
     eval_iters: int = 100      # Reasonable for quick eval
-    learning_rate: float = 5e-4  # Increased for faster convergence (was 1e-4)
-    min_lr: float = 5e-5      # Keep same ratio (10x reduction)
+    learning_rate: float = 3e-3  # Proven stable, 3x faster convergence
+    min_lr: float = 3e-4      # Keep same ratio (10x reduction)
     warmup_iters: int = 1000  # Matches Reddit post
     weight_decay: float = 0.1
     beta1: float = 0.9

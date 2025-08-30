@@ -274,7 +274,7 @@ class SimpleGPT(nn.Module):
             print(f"  Total parameters: {total_params:,}")
             print(f"  Parameters saved: {saved:,} ({saved/1e6:.1f}M)")
             regular_model_size = total_params + saved  # What it would be without factorization
-            print(f"  vs regular model: {regular_model_size/1e6:.1f}M → {total_params/1e6:.1f}M")
+            print(f"  vs regular model: {regular_model_size/1e6:.1f}M -> {total_params/1e6:.1f}M")
         else:
             print(f"Model initialized: {total_params:,} parameters")
     
