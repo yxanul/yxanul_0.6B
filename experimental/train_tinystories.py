@@ -509,7 +509,13 @@ if __name__ == "__main__":
     parser.add_argument('--vocab_size', type=int, default=None,
                        help='Custom vocabulary size (e.g., 200005 for SuperBPE)')
     parser.add_argument('--learning_rate', type=float, default=None,
-                       help='Learning rate (default: 5e-4, safe range: 1e-4 to 6e-4)')
+                       help='Learning rate (default: 3e-3, proven stable up to 3e-3)')
+    parser.add_argument('--block_size', type=int, default=None,
+                       help='Context length (default: 128, recommended: 2048 for A100)')
+    parser.add_argument('--batch_size', type=int, default=None,
+                       help='Batch size (default: auto-selected based on vocab, recommended: 64 for A100)')
+    parser.add_argument('--gradient_accumulation_steps', type=int, default=None,
+                       help='Gradient accumulation steps (default: 16-32 based on vocab)')
     args = parser.parse_args()
     
     # Create config
@@ -534,14 +540,14 @@ if __name__ == "__main__":
     # Adjust settings for large vocabulary (200k) to avoid OOM
     if vocab_size > 100000:
         # Settings for large vocabulary (SuperBPE)
-        batch_size = 32  # Middle ground for 24GB VRAM
-        block_size = 128  # Keep original for good throughput
-        gradient_accumulation_steps = 32  # Maintain 1024 effective batch
+        batch_size = args.batch_size if args.batch_size else 32  # Middle ground for 24GB VRAM
+        block_size = args.block_size if args.block_size else 128  # Keep original for good throughput
+        gradient_accumulation_steps = args.gradient_accumulation_steps if args.gradient_accumulation_steps else 32  # Maintain 1024 effective batch
     else:
-        # Settings for normal vocabulary (GPT-2)
-        batch_size = 64
-        block_size = 128
-        gradient_accumulation_steps = 16
+        # Settings for normal vocabulary (GPT-2 or SmolLM)
+        batch_size = args.batch_size if args.batch_size else 64
+        block_size = args.block_size if args.block_size else 128
+        gradient_accumulation_steps = args.gradient_accumulation_steps if args.gradient_accumulation_steps else 16
     
     config = TrainingConfig(
         dtype=args.dtype,
@@ -556,7 +562,7 @@ if __name__ == "__main__":
         batch_size=batch_size,
         block_size=block_size,
         gradient_accumulation_steps=gradient_accumulation_steps,
-        learning_rate=args.learning_rate if args.learning_rate else 5e-4
+        learning_rate=args.learning_rate if args.learning_rate else 3e-3  # Default to proven stable 3e-3
     )
     
     # Check if data exists
