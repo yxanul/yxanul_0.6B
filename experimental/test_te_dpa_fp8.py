@@ -7,7 +7,7 @@ Tests if DPA works at all with FP8 on RTX 5090.
 import os
 # Set larger workspace for GEMM operations
 os.environ.setdefault("NVTE_GEMM_WORKSPACE_SIZE", str(128*1024*1024))
-os.environ.setdefault("NVTE_FUSED_ATTN_BACKEND", "1")  # 1=FlashAttention
+os.environ.setdefault("NVTE_FUSED_ATTN_BACKEND", "2")  # 1=FlashAttention
 
 import torch
 import torch.nn.functional as F
