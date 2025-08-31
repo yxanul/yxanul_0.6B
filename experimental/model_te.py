@@ -15,6 +15,13 @@ from dataclasses import dataclass
 try:
     import transformer_engine.pytorch as te
     from transformer_engine.common.recipe import Format, DelayedScaling
+    # Try to import MXFP8 for Blackwell GPUs
+    try:
+        from transformer_engine.common.recipe import MXFP8BlockScaling
+        MXFP8_AVAILABLE = True
+    except ImportError:
+        MXFP8_AVAILABLE = False
+        print("Note: MXFP8BlockScaling not available (needs newer TransformerEngine)")
     TE_AVAILABLE = True
 except ImportError:
     print("Warning: TransformerEngine not available. Install with: pip install transformer-engine")
@@ -49,13 +56,44 @@ class ModelConfig:
         assert self.head_dim % 16 == 0, "head_dim must be divisible by 16 for FP8"
 
 
-def get_fp8_recipe(config):
-    """Get the FP8 recipe for training."""
-    return DelayedScaling(
-        fp8_format=Format.HYBRID,  # E4M3 for forward, E5M2 for backward
-        amax_history_len=config.fp8_amax_history_len,
-        amax_compute_algo=config.fp8_amax_compute_algo,
-    )
+def get_fp8_recipe(config, use_mx=None):
+    """Get the FP8 recipe for training.
+    
+    Args:
+        config: Model configuration
+        use_mx: Use MXFP8 for Blackwell GPUs. If None, auto-detect.
+    """
+    # Auto-detect Blackwell GPUs (RTX 5090, etc.)
+    if use_mx is None:
+        import torch
+        if torch.cuda.is_available():
+            device_name = torch.cuda.get_device_name(0).lower()
+            # Check for Blackwell GPUs
+            use_mx = ('5090' in device_name or '5080' in device_name or 
+                     '5070' in device_name or 'blackwell' in device_name)
+            if use_mx:
+                print(f"Detected Blackwell GPU ({torch.cuda.get_device_name(0)}), attempting MXFP8")
+        else:
+            use_mx = False
+    
+    if use_mx and MXFP8_AVAILABLE:
+        # Blackwell: per-32-element microscale, E4M3 everywhere
+        print("Using MXFP8BlockScaling (Blackwell-optimized)")
+        return MXFP8BlockScaling(
+            fp8_format=Format.E4M3,  # E4M3 for both forward and backward
+            amax_history_len=config.fp8_amax_history_len,
+            amax_compute_algo=config.fp8_amax_compute_algo,
+        )
+    else:
+        # Standard FP8 for H100/H200
+        if use_mx and not MXFP8_AVAILABLE:
+            print("Warning: MXFP8 requested but not available in TransformerEngine")
+        print("Using standard DelayedScaling (H100-style)")
+        return DelayedScaling(
+            fp8_format=Format.HYBRID,  # E4M3 forward, E5M2 backward
+            amax_history_len=config.fp8_amax_history_len,
+            amax_compute_algo=config.fp8_amax_compute_algo,
+        )
 
 
 class RoPE:

@@ -237,8 +237,8 @@ def train():
     # Cast model to BF16 (crucial for memory/bandwidth)
     model = model.to(torch.bfloat16)
     
-    # Get FP8 recipe
-    fp8_recipe = get_fp8_recipe(model_config)
+    # Get FP8 recipe (auto-detects Blackwell and uses MXFP8 if available)
+    fp8_recipe = get_fp8_recipe(model_config, use_mx=None)  # Auto-detect GPU type
     
     # Initialize or resume
     iter_num = 0
@@ -271,7 +271,9 @@ def train():
     # Compile model if requested
     if config.compile:
         print(f"Compiling model with mode={config.compile_mode}...")
-        model = torch.compile(model, mode=config.compile_mode)
+        # Disable CUDA graphs to avoid warnings with TransformerEngine
+        model = torch.compile(model, mode=config.compile_mode,
+                            options={"triton.cudagraphs": False})
     
     # Optimizer (AdamW)
     optimizer = torch.optim.AdamW(
