@@ -199,6 +199,10 @@ def train():
     parser.add_argument('--batch_size', type=int, help='Override batch size')
     parser.add_argument('--compile', action='store_true', help='Use torch.compile')
     parser.add_argument('--no_fp8', action='store_true', help='Disable FP8')
+    parser.add_argument('--data_dir', type=str, default='data_fineweb_edu_smollm', help='Data directory')
+    parser.add_argument('--max_iters', type=int, default=8000, help='Maximum iterations')
+    parser.add_argument('--eval_interval', type=int, default=100, help='Evaluation interval')
+    parser.add_argument('--log_interval', type=int, default=10, help='Logging interval')
     args = parser.parse_args()
     
     # Configuration
@@ -210,6 +214,10 @@ def train():
     if args.no_fp8:
         config.use_fp8 = False
     config.compile = args.compile
+    config.data_dir = args.data_dir
+    config.max_iters = args.max_iters
+    config.eval_interval = args.eval_interval
+    config.log_interval = args.log_interval
     
     # Model configuration
     model_config = ModelConfig(
