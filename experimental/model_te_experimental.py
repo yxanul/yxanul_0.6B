@@ -177,6 +177,8 @@ class Attention(nn.Module):
         if self.use_fp8_attention:
             try:
                 self.dpa = DotProductAttention(
+                    num_attention_heads=self.n_head,  # Required parameter
+                    kv_channels=self.head_dim,         # Required parameter (D dimension)
                     attn_mask_type="causal",
                     attention_dropout=self.dropout_p,
                 )
