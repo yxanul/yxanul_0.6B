@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-Quick version: Prepare 1/4 of FineWeb-Edu dataset for fast testing.
-Processes ~500M tokens in ~10 minutes for rapid experimentation.
+Prepare mixed-domain dataset for training.
+Processes half of the 3B token mixed dataset (~1.5B tokens).
+Dataset includes diverse content: text, code, math, etc.
 """
 
 import numpy as np
@@ -41,12 +42,13 @@ def tokenize_batch_fast(texts, tokenizer, eos_token_id):
 
 def prepare_dataset_quick():
     """
-    Quick version: Prepare 1/4 of FineWeb-Edu for testing.
-    Processes ~500M tokens in about 10 minutes.
+    Prepare mixed-domain dataset (half of 3B tokens).
+    More diverse than FineWeb-Edu - includes code, math, text.
     """
     
     print("="*60)
-    print("QUICK DATASET PREPARATION (1/4 size for testing)")
+    print("MIXED-DOMAIN DATASET PREPARATION")
+    print("Processing 1.5B tokens from mixed-pretrain-3b")
     print("With SmolLM2-135M Tokenizer")
     print("="*60)
     
@@ -79,67 +81,66 @@ def prepare_dataset_quick():
     # Determine data path based on platform
     if platform.system() == "Linux":
         # RunPod instance paths
-        data_base = Path("/workspace/yxanul_0.6B/experimental/fineweb-edu-highest-quality-2025/data")
+        data_file = Path("/workspace/yxanul_0.6B/experimental/mixed-pretrain-3b/mixed_dataset_3b.parquet")
     else:
         # Local Windows paths
-        data_base = Path("D:/ai_testing/yxanul_0.6B/experimental/fineweb-edu-highest-quality-2025/data")
+        data_file = Path("D:/ai_testing/yxanul_0.6B/experimental/mixed-pretrain-3b/mixed_dataset_3b.parquet")
     
-    # Check for dataset directory
-    if not data_base.exists():
+    # Check for dataset file
+    if not data_file.exists():
         # Try relative path
-        data_base = Path("fineweb-edu-highest-quality-2025/data")
-        if not data_base.exists():
-            print(f"\nERROR: Cannot find dataset at {data_base}")
-            print("Please ensure fineweb-edu-highest-quality-2025/data/ exists")
+        data_file = Path("mixed-pretrain-3b/mixed_dataset_3b.parquet")
+        if not data_file.exists():
+            print(f"\nERROR: Cannot find dataset at {data_file}")
+            print("Please download from: https://huggingface.co/datasets/Yxanul/mixed-pretrain-3b")
+            print("Place in: experimental/mixed-pretrain-3b/mixed_dataset_3b.parquet")
             raise FileNotFoundError("Dataset not found")
     
-    # Get all parquet files
-    parquet_files = sorted(data_base.glob("*.parquet"))
-    if not parquet_files:
-        raise FileNotFoundError(f"No parquet files found in {data_base}")
-    
-    total_files = len(parquet_files)
-    print(f"\nFound {total_files} parquet files total")
-    
-    # QUICK MODE: Process only 1/4 of files
-    quarter_files = max(1, total_files // 4)  # At least 1 file
-    parquet_files = parquet_files[:quarter_files]
-    print(f"QUICK MODE: Processing only {quarter_files} files (1/4 of dataset)")
-    print(f"Expected: ~500M tokens, ~10 minutes processing time")
+    # Load the single parquet file
+    print(f"\nLoading mixed dataset from {data_file.name}...")
+    print("This dataset contains diverse content: text, code, math, etc.")
+    print("Processing HALF of the 3B tokens (~1.5B tokens)")
     
     # Create output directory
-    output_dir = Path('data_fineweb_edu_quick')
+    output_dir = Path('data_mixed_3b')
     output_dir.mkdir(exist_ok=True)
     
-    # Process files
-    print(f"\nProcessing {len(parquet_files)} parquet files...")
-    all_train_tokens = []
-    total_docs = 0
-    total_chars = 0
+    # Load and process the parquet file
+    print("\nLoading parquet file...")
+    df = pd.read_parquet(data_file)
     
-    for file_idx, parquet_file in enumerate(tqdm(parquet_files, desc="Processing files")):
-        print(f"\n  [{file_idx+1}/{len(parquet_files)}] Loading {parquet_file.name}...")
-        df = pd.read_parquet(parquet_file)
+    # Check columns
+    if 'text' not in df.columns:
+        print(f"Available columns: {df.columns.tolist()}")
+        # Try 'content' or other common column names
+        if 'content' in df.columns:
+            df['text'] = df['content']
+        else:
+            raise ValueError("No 'text' or 'content' column found in dataset")
+    
+    total_docs = len(df)
+    print(f"Total documents: {total_docs:,}")
+    
+    # Process HALF of the dataset for quick testing
+    half_docs = total_docs // 2
+    print(f"Processing first {half_docs:,} documents (50% of dataset)")
+    df = df.head(half_docs)
+    
+    texts = df['text'].tolist()
+    total_chars = sum(len(text) for text in texts if pd.notna(text))
+    
+    # Process in batches
+    print("\nTokenizing documents...")
+    all_train_tokens = []
+    batch_size = 5000
+    
+    for i in tqdm(range(0, len(texts), batch_size), desc="Processing batches"):
+        batch = texts[i:min(i+batch_size, len(texts))]
+        tokens = tokenize_batch_fast(batch, tokenizer, eos_token_id)
+        all_train_tokens.extend(tokens)
         
-        if 'text' not in df.columns:
-            print(f"  Warning: 'text' column not found, skipping")
-            continue
-        
-        texts = df['text'].tolist()
-        print(f"  Documents: {len(texts):,}")
-        
-        # Track statistics
-        total_docs += len(texts)
-        total_chars += sum(len(text) for text in texts if pd.notna(text))
-        
-        # Process in batches
-        batch_size = 5000
-        for i in range(0, len(texts), batch_size):
-            batch = texts[i:min(i+batch_size, len(texts))]
-            tokens = tokenize_batch_fast(batch, tokenizer, eos_token_id)
-            all_train_tokens.extend(tokens)
-        
-        print(f"  Running total: {len(all_train_tokens):,} tokens")
+        if i % (batch_size * 10) == 0 and i > 0:
+            print(f"  Processed {i:,} docs, current tokens: {len(all_train_tokens):,}")
     
     # Convert to numpy array
     print("\nConverting to numpy array...")
@@ -173,33 +174,33 @@ def prepare_dataset_quick():
     
     # Save config
     config = {
-        'dataset': 'fineweb-edu-highest-quality-2025-QUICK',
-        'mode': 'quick_test',
+        'dataset': 'mixed-pretrain-3b',
+        'mode': 'half_dataset',
         'tokenizer': 'HuggingFaceTB/SmolLM2-135M',
         'vocab_size': len(tokenizer),
         'train_tokens': len(train_tokens),
         'val_tokens': len(val_tokens),
-        'total_documents': total_docs,
-        'files_processed': len(parquet_files),
+        'total_documents': half_docs,
+        'dataset_type': 'mixed-domain (text, code, math)',
     }
     
     with open(output_dir / 'dataset_config.json', 'w') as f:
         json.dump(config, f, indent=2)
     
     print("\n" + "="*60)
-    print("QUICK DATASET READY!")
+    print("MIXED DATASET READY!")
     print("="*60)
     print(f"Output: {output_dir}")
-    print(f"Size: ~{len(train_tokens)/1e6:.0f}M tokens")
-    print("\nTo test training quickly:")
-    print("  # Test if FP8 works on your hardware:")
-    print("  python model_te.py")
-    print("\n  # If FP8 works (H100 only):")
-    print("  python train_fp8.py --data_dir data_fineweb_edu_quick \\")
-    print("    --max_iters 100 --eval_interval 20")
-    print("\n  # If FP8 doesn't work (A100/4090/5090):")
-    print("  python train_tinystories.py --data_dir data_fineweb_edu_quick \\")
-    print("    --vocab_size 49152 --max_iters 100 --eval_interval 20")
+    print(f"Size: {len(train_tokens)/1e9:.1f}B tokens")
+    print(f"Content: Mixed-domain (text, code, math)")
+    print("\nTo test FP8 on RTX 5090:")
+    print("  # Run FP8 training:")
+    print("  python train_fp8.py --data_dir data_mixed_3b \\")
+    print("    --max_iters 1000 --eval_interval 100 --compile")
+    print("\n  # Compare with BF16:")
+    print("  python train_fp8.py --data_dir data_mixed_3b \\")
+    print("    --max_iters 1000 --eval_interval 100 --no_fp8 --compile")
+    print("\nWatch for tokens/sec to see if FP8 gives speedup!")
 
 if __name__ == "__main__":
     prepare_dataset_quick()
