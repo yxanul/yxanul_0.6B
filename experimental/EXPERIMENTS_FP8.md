@@ -380,28 +380,35 @@ python train_fp8_optimized.py --batch_size 18 --no_fusion
 
 ### The Problem: We Weren't Actually Using FP8 Weight Caching!
 
-Our original implementation had a **critical bug** that prevented FP8 weight caching from working:
+Our original implementation had a **critical bug** that prevented FP8 weight caching from working. Additionally, the TransformerEngine API changed in version 2.4+:
 
 ```python
-# WRONG: Passing is_first_microbatch to model (does nothing!)
+# WRONG (our original): Passing to model but model ignores it
 with te.fp8_autocast(enabled=True, fp8_recipe=fp8_recipe):
     logits, loss = model(x, y, is_first_microbatch=(micro_step == 0))
 
-# CORRECT: Pass to autocast context where TransformerEngine reads it!
+# WRONG (TE <2.4 API): Pass to autocast context (deprecated)
 with te.fp8_autocast(
     enabled=True,
     fp8_recipe=fp8_recipe,
-    is_first_microbatch=(micro_step == 0)  # ← THIS IS THE FIX
+    is_first_microbatch=(micro_step == 0)  # No longer supported in TE >=2.4
 ):
     logits, loss = model(x, y)
+
+# CORRECT (TE >=2.4): Pass to individual TE modules
+is_first_microbatch = (micro_step == 0)
+with te.fp8_autocast(enabled=True, fp8_recipe=fp8_recipe):
+    logits, loss = model(x, y, is_first_microbatch=is_first_microbatch)
+# Each te.Linear, te.LayerNormLinear etc. receives the flag
 ```
 
 ### All Issues Found and Fixed
 
 #### 1. FP8 Weight Caching Not Working
-- **Bug**: Passed `is_first_microbatch` to model's forward() instead of autocast context
+- **Bug**: Model wasn't propagating `is_first_microbatch` to TE layers
+- **API Change**: In TE >=2.4, flag moved from autocast to individual modules
 - **Impact**: Re-casting weights 16 times per iteration (huge overhead!)
-- **Fix**: Pass flag to `te.fp8_autocast()` where TransformerEngine actually reads it
+- **Fix**: Pass flag through model to each te.Linear/LayerNormLinear call
 - **Expected gain**: +10-15k tokens/sec
 
 #### 2. Unnecessary Gradient Accumulation "Fusion"

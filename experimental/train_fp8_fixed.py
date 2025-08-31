@@ -141,13 +141,9 @@ def evaluate(model, data_loader, config, fp8_recipe):
         x, y = data_loader.get_batch('val', config.batch_size)
         
         if config.use_fp8:
-            # Each eval step is its own "first microbatch"
-            with te.fp8_autocast(
-                enabled=True, 
-                fp8_recipe=fp8_recipe,
-                is_first_microbatch=True
-            ):
-                logits, loss = model(x, y)
+            # In TE >=2.4: Pass is_first_microbatch to modules
+            with te.fp8_autocast(enabled=True, fp8_recipe=fp8_recipe):
+                logits, loss = model(x, y, is_first_microbatch=True)
         else:
             logits, loss = model(x, y)
         
@@ -286,15 +282,12 @@ def train():
             # Determine if using FP8
             use_fp8_now = config.use_fp8 and (iter_num >= config.fp8_warmup_steps)
             
-            # Forward pass with PROPER FP8 weight caching
+            # Forward pass with PROPER FP8 weight caching (TE >=2.4 API)
             if use_fp8_now:
-                # THIS IS THE FIX: Pass is_first_microbatch to autocast context!
-                with te.fp8_autocast(
-                    enabled=True,
-                    fp8_recipe=fp8_recipe,
-                    is_first_microbatch=(micro_step == 0)  # Cast weights only once
-                ):
-                    logits, loss = model(x, y)
+                # In TE >=2.4: Pass is_first_microbatch to modules, not autocast!
+                is_first_microbatch = (micro_step == 0)
+                with te.fp8_autocast(enabled=True, fp8_recipe=fp8_recipe):
+                    logits, loss = model(x, y, is_first_microbatch=is_first_microbatch)
             else:
                 logits, loss = model(x, y)
             
@@ -366,11 +359,12 @@ def train():
     print("\n" + "="*50)
     print("Training Complete!")
     print(f"Best validation loss: {best_val_loss:.4f}")
-    print("Expected performance improvements:")
+    print("Expected performance improvements (TE >=2.4 API):")
     print("  - +10-15k tok/s from proper FP8 weight caching")
     print("  - +5-10k tok/s from removing gradient fusion overhead")
     print("  - +2-5k tok/s from Flash Attention")
     print("  - Total: ~210k+ tokens/sec expected on RTX 5090")
+    print("Note: Using module-level is_first_microbatch (TE >=2.4)")
     print("="*50)
 
 

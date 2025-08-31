@@ -149,12 +149,12 @@ class FixedAttention(nn.Module):
         self.dropout = nn.Dropout(config.dropout)
         self.dropout_p = config.dropout
     
-    def forward(self, x, rope_cache):
+    def forward(self, x, rope_cache, is_first_microbatch=None):
         B, T, C = x.shape
         
         if self.fuse_qkv:
             # Fused QKV projection with single kernel
-            qkv = self.qkv(x)
+            qkv = self.qkv(x, is_first_microbatch=is_first_microbatch)
             # Split into Q, K, V
             q_size = self.n_head * self.head_dim
             k_size = self.n_kv_heads * self.head_dim
@@ -165,9 +165,9 @@ class FixedAttention(nn.Module):
             v = qkv[:, :, q_size+k_size:].view(B, T, self.n_kv_heads, self.head_dim)
         else:
             # Separate projections
-            q = self.q_proj(x).view(B, T, self.n_head, self.head_dim)
-            k = self.k_proj(x).view(B, T, self.n_kv_heads, self.head_dim)
-            v = self.v_proj(x).view(B, T, self.n_kv_heads, self.head_dim)
+            q = self.q_proj(x, is_first_microbatch=is_first_microbatch).view(B, T, self.n_head, self.head_dim)
+            k = self.k_proj(x, is_first_microbatch=is_first_microbatch).view(B, T, self.n_kv_heads, self.head_dim)
+            v = self.v_proj(x, is_first_microbatch=is_first_microbatch).view(B, T, self.n_kv_heads, self.head_dim)
         
         # Apply RoPE
         q = RoPE.apply_rotary_pos_emb(q, rope_cache)
@@ -196,7 +196,7 @@ class FixedAttention(nn.Module):
         y = y.transpose(1, 2).contiguous().view(B, T, C)
         
         # Output projection
-        y = self.o_proj(y)
+        y = self.o_proj(y, is_first_microbatch=is_first_microbatch)
         y = self.dropout(y)
         
         return y
@@ -230,11 +230,11 @@ class FixedFeedForward(nn.Module):
         )
         self.dropout = nn.Dropout(config.dropout)
     
-    def forward(self, x):
-        gate = F.silu(self.gate_proj(x))
-        up = self.up_proj(x)
+    def forward(self, x, is_first_microbatch=None):
+        gate = F.silu(self.gate_proj(x, is_first_microbatch=is_first_microbatch))
+        up = self.up_proj(x, is_first_microbatch=is_first_microbatch)
         x = gate * up
-        x = self.down_proj(x)
+        x = self.down_proj(x, is_first_microbatch=is_first_microbatch)
         x = self.dropout(x)
         return x
 
@@ -249,10 +249,10 @@ class FixedBlock(nn.Module):
         self.ln_2 = te.RMSNorm(config.n_embd, eps=1e-6)
         self.ffn = FixedFeedForward(config)
     
-    def forward(self, x, rope_cache):
-        # Simple and clean - no unnecessary is_first_microbatch passing
-        x = x + self.attn(self.ln_1(x), rope_cache)
-        x = x + self.ffn(self.ln_2(x))
+    def forward(self, x, rope_cache, is_first_microbatch=None):
+        # Pass is_first_microbatch through to TE layers
+        x = x + self.attn(self.ln_1(x), rope_cache, is_first_microbatch)
+        x = x + self.ffn(self.ln_2(x), is_first_microbatch)
         return x
 
 
@@ -311,10 +311,10 @@ class FixedGPT_TE(nn.Module):
     def num_parameters(self):
         return sum(p.numel() for p in self.parameters() if p.requires_grad)
     
-    def forward(self, idx, targets=None):
+    def forward(self, idx, targets=None, is_first_microbatch=None):
         """
-        Simple forward pass - no is_first_microbatch needed.
-        FP8 weight caching is handled by the autocast context.
+        Forward pass with is_first_microbatch for FP8 weight caching.
+        In TE ≥2.4, this flag is passed to individual modules.
         """
         device = idx.device
         b, t = idx.size()
@@ -326,7 +326,7 @@ class FixedGPT_TE(nn.Module):
         
         # Forward through transformer blocks
         for block in self.transformer.h:
-            x = block(x, self.rope_cache)
+            x = block(x, self.rope_cache, is_first_microbatch)
         
         # Final norm and output
         x = self.transformer.ln_f(x)
@@ -380,30 +380,27 @@ if __name__ == "__main__":
     x = torch.randint(0, config.vocab_size, (2, 128)).cuda()
     fp8_recipe = get_fp8_recipe(config)
     
-    print("\nTesting with PROPER FP8 weight caching...")
+    print("\nTesting with PROPER FP8 weight caching (TE ≥2.4 API)...")
     
-    # Simulate gradient accumulation with correct context usage
+    # Simulate gradient accumulation with correct module-level caching
     optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4, fused=True)
     optimizer.zero_grad(set_to_none=True)
     
     for micro_step in range(4):
-        # THIS IS THE FIX: Pass is_first_microbatch to autocast, not model!
-        with te.fp8_autocast(
-            enabled=True, 
-            fp8_recipe=fp8_recipe,
-            is_first_microbatch=(micro_step == 0)
-        ):
-            logits, loss = model(x, targets=x)
+        # In TE ≥2.4: Pass is_first_microbatch to modules, not autocast!
+        is_first_microbatch = (micro_step == 0)
+        with te.fp8_autocast(enabled=True, fp8_recipe=fp8_recipe):
+            logits, loss = model(x, targets=x, is_first_microbatch=is_first_microbatch)
         
         loss = loss / 4  # Scale by gradient accumulation steps
         loss.backward()
-        print(f"  Micro-step {micro_step}: loss={loss.item()*4:.4f}")
+        print(f"  Micro-step {micro_step}: loss={loss.item()*4:.4f} (first={is_first_microbatch})")
     
     # Optimizer step
     torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
     optimizer.step()
     
     print("✓ Fixed model test successful!")
-    print("  - FP8 weight caching properly enabled via autocast")
+    print("  - FP8 weight caching enabled via module is_first_microbatch (TE ≥2.4)")
     print("  - Native gradient accumulation (no overhead)")
     print("  - QKV fusion independent of grad accumulation")
