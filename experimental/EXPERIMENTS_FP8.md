@@ -166,6 +166,23 @@ Expected output:
 ❌ MXFP8 failed: cuBLAS error  # This is expected
 ```
 
+## Known Limitations on RTX 5090
+
+### FP8 Attention Not Supported
+- **Issue**: cuDNN lacks FP8 fused attention kernels for consumer Blackwell (SM 12.0)
+- **Error**: `cuDNN Error: No valid engine configs for fused attention operation`
+- **Solution**: Keep attention in BF16, use FP8 only for Linear layers
+- **Impact**: Still achieves 191k tokens/sec (15% speedup over pure BF16)
+
+### What Works vs What Doesn't
+| Component | FP8 Support | Notes |
+|-----------|------------|-------|
+| Linear layers (Q,K,V,O projections) | ✅ Works | Full FP8 with DelayedScaling |
+| FFN/MLP layers | ✅ Works | Full FP8 acceleration |
+| Attention computation (QK^T, softmax) | ❌ Fails | Must stay in BF16 |
+| LayerNorm | ✅ Works | Via TransformerEngine |
+| Embeddings | ⚠️ BF16 | Kept in BF16 for stability |
+
 ## Future Work
 
 1. **Test larger models** - Does FP8 scale to 1B+ parameters?
@@ -173,6 +190,7 @@ Expected output:
 3. **Quality analysis** - How does FP8 affect final model quality?
 4. **Multi-GPU** - Does FP8 work with data/model parallelism?
 5. **Other Blackwell GPUs** - Test RTX 5080, 5070
+6. **Wait for cuDNN updates** - Future versions may add consumer FP8 attention support
 
 ## Significance
 

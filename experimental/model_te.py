@@ -83,12 +83,13 @@ def get_fp8_recipe(config, use_mx=None):
         if torch.cuda.is_available():
             device_name = torch.cuda.get_device_name(0)
             print(f"GPU: {device_name}")
-        print("Using standard DelayedScaling FP8 with FP8 attention enabled!")
+        print("Using standard DelayedScaling FP8 (RTX 5090 compatible)")
+        print("  Note: Attention stays in BF16, Linear layers use FP8")
         return DelayedScaling(
             fp8_format=Format.HYBRID,  # E4M3 forward, E5M2 backward
             amax_history_len=config.fp8_amax_history_len,
             amax_compute_algo=config.fp8_amax_compute_algo,
-            fp8_dpa=True,  # Enable FP8 DotProductAttention for even more speedup!
+            # fp8_dpa=False by default - RTX 5090 doesn't support FP8 attention
         )
 
 
@@ -121,7 +122,7 @@ class RoPE:
 
 
 class Attention(nn.Module):
-    """Multi-Head Attention with GQA - using TE Linear and DotProductAttention for FP8."""
+    """Multi-Head Attention with GQA - using TE Linear for FP8 projections, BF16 for attention."""
     
     def __init__(self, config):
         super().__init__()
@@ -159,15 +160,6 @@ class Attention(nn.Module):
         
         self.dropout = nn.Dropout(config.dropout)
         self.dropout_p = config.dropout
-        
-        # Create TE DotProductAttention for FP8 attention computation
-        from transformer_engine.pytorch import DotProductAttention
-        self.dpa = DotProductAttention(
-            num_attention_heads=config.n_head,
-            kv_channels=config.head_dim,
-            attention_dropout=config.dropout if self.training else 0.0,
-            attn_mask_type="causal"
-        )
     
     def forward(self, x, rope_cache):
         B, T, C = x.shape
@@ -193,17 +185,17 @@ class Attention(nn.Module):
             k = k.repeat_interleave(self.n_head // self.n_kv_heads, dim=1)
             v = v.repeat_interleave(self.n_head // self.n_kv_heads, dim=1)
         
-        # Use TransformerEngine DotProductAttention for FP8 attention!
-        # TE DPA expects [B, S, H, D] format
-        q = q.transpose(1, 2).contiguous()  # [B, H, T, D] -> [B, T, H, D]
-        k = k.transpose(1, 2).contiguous()  # [B, H, T, D] -> [B, T, H, D]
-        v = v.transpose(1, 2).contiguous()  # [B, H, T, D] -> [B, T, H, D]
+        # Use PyTorch SDPA for attention (stays in BF16)
+        # RTX 5090 doesn't support FP8 fused attention kernels
+        y = F.scaled_dot_product_attention(
+            q, k, v,
+            attn_mask=None,
+            dropout_p=0.0 if not self.training else self.dropout_p,
+            is_causal=True
+        )
         
-        # FP8 attention computation when fp8_dpa=True in recipe!
-        y = self.dpa(q, k, v)  # Returns [B, T, H, D]
-        
-        # Reshape output to [B, T, C]
-        y = y.reshape(B, T, C)
+        # Reshape output
+        y = y.transpose(1, 2).contiguous().view(B, T, C)
         
         # Output projection (FP8)
         y = self.o_proj(y)
