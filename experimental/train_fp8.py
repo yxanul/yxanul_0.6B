@@ -271,10 +271,8 @@ def train():
     # Compile model if requested
     if config.compile:
         print(f"Compiling model...")
-        # Use default mode with options to disable CUDA graphs (fixes TE warnings)
-        # Can't use both mode='max-autotune' and options together
-        model = torch.compile(model, mode='default',
-                            options={"triton.cudagraphs": False})
+        # Use only options (no mode) to disable CUDA graphs for TE compatibility
+        model = torch.compile(model, options={"triton.cudagraphs": False})
     
     # Optimizer (AdamW)
     optimizer = torch.optim.AdamW(
