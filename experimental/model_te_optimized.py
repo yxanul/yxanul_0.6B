@@ -305,7 +305,8 @@ class OptimizedGPT_TE(nn.Module):
         print("Initializing main_grad tensors for gradient accumulation fusion...")
         for param in self.parameters():
             if param.requires_grad:
-                param.main_grad = torch.zeros_like(param, dtype=torch.float32)
+                # Ensure main_grad is on the same device as the parameter
+                param.main_grad = torch.zeros_like(param, dtype=torch.float32, device=param.device)
     
     def sync_gradients(self):
         """Sync gradients from main_grad to grad (for gradient accumulation fusion)."""
@@ -313,6 +314,9 @@ class OptimizedGPT_TE(nn.Module):
             for param in self.parameters():
                 if param.requires_grad and hasattr(param, 'main_grad'):
                     if param.grad is not None:
+                        # Ensure both tensors are on the same device
+                        if param.main_grad.device != param.grad.device:
+                            param.main_grad = param.main_grad.to(param.grad.device)
                         param.main_grad.add_(param.grad)
                         param.grad = None
     

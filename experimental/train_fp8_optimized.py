@@ -218,26 +218,14 @@ def train():
     # Get FP8 recipe
     fp8_recipe = get_fp8_recipe(model_config)
     
-    # Optimizer
-    if config.fuse_wgrad_accumulation:
-        # Use main_grad for optimization when using gradient fusion
-        optimizer = torch.optim.AdamW(
-            [{'params': p, 'grad': p.main_grad if hasattr(p, 'main_grad') else p.grad} 
-             for p in model.parameters() if p.requires_grad],
-            lr=config.learning_rate,
-            betas=(config.beta1, config.beta2),
-            weight_decay=config.weight_decay,
-            fused=True
-        )
-    else:
-        # Standard optimizer
-        optimizer = torch.optim.AdamW(
-            model.parameters(),
-            lr=config.learning_rate,
-            betas=(config.beta1, config.beta2),
-            weight_decay=config.weight_decay,
-            fused=True
-        )
+    # Optimizer - always use standard setup
+    optimizer = torch.optim.AdamW(
+        model.parameters(),
+        lr=config.learning_rate,
+        betas=(config.beta1, config.beta2),
+        weight_decay=config.weight_decay,
+        fused=True
+    )
     
     # Data loader
     data_loader = DataLoader(config.data_dir, config.block_size, config.device)
@@ -281,13 +269,12 @@ def train():
             param_group['lr'] = lr
         
         # Zero gradients
+        optimizer.zero_grad()  # Always zero optimizer gradients
         if config.fuse_wgrad_accumulation:
-            # Zero main_grad tensors
+            # Also zero main_grad tensors
             for p in model.parameters():
                 if hasattr(p, 'main_grad'):
                     p.main_grad.zero_()
-        else:
-            optimizer.zero_grad()
         
         # Accumulate gradients
         total_loss = 0
@@ -318,17 +305,26 @@ def train():
             if config.fuse_wgrad_accumulation:
                 model.sync_gradients()
         
+        # If using gradient fusion, copy main_grad to grad for optimizer
+        if config.fuse_wgrad_accumulation:
+            for p in model.parameters():
+                if hasattr(p, 'main_grad') and p.requires_grad:
+                    p.grad = p.main_grad.clone()
+        
         # Gradient clipping
         if config.grad_clip > 0:
-            if config.fuse_wgrad_accumulation:
-                # Clip main_grad
-                grads = [p.main_grad for p in model.parameters() if hasattr(p, 'main_grad')]
-                grad_norm = torch.nn.utils.clip_grad_norm_(grads, config.grad_clip)
-            else:
-                grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), config.grad_clip)
+            grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), config.grad_clip)
+        else:
+            grad_norm = torch.tensor(0.0)
         
         # Optimizer step
         optimizer.step()
+        
+        # Clear gradients after optimizer step
+        if config.fuse_wgrad_accumulation:
+            for p in model.parameters():
+                if hasattr(p, 'main_grad'):
+                    p.main_grad.zero_()
         
         # Update token count
         tokens_processed += config.batch_size * config.block_size * config.gradient_accumulation_steps
