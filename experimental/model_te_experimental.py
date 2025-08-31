@@ -200,13 +200,23 @@ class Attention(nn.Module):
         k = RoPE.apply_rotary_pos_emb(k, rope_cache)
         
         # EXPERIMENTAL: Use FP8 DotProductAttention with correct shape handling
+        dpa_succeeded = False
         if self.use_fp8_attention and hasattr(self, 'dpa'):
+            # Store original tensors for fallback
+            q_orig, k_orig, v_orig = q, k, v
+            
+            # Debug shapes before expansion
+            print(f"  Before GQA - Q: {q.shape}, K: {k.shape}, V: {v.shape}")
+            
             # GQA: Expand K/V heads BEFORE DPA (critical!)
             # DPA needs all heads to match, staying in [B, S, H, D] format
             if self.n_kv_heads != self.n_head:
                 repeat_factor = self.n_head // self.n_kv_heads
                 k = k.repeat_interleave(repeat_factor, dim=2)  # dim=2 is H in [B, S, H, D]
                 v = v.repeat_interleave(repeat_factor, dim=2)
+            
+            # Debug shapes after expansion
+            print(f"  After GQA - Q: {q.shape}, K: {k.shape}, V: {v.shape}")
             
             # Ensure contiguous for DPA (required for cuDNN kernels)
             q = q.contiguous()
@@ -219,13 +229,16 @@ class Attention(nn.Module):
                 y = self.dpa(q, k, v)  # Returns [B, S, H, D]
                 # Reshape to [B, T, C]
                 y = y.reshape(B, T, C)
+                dpa_succeeded = True
             except Exception as e:
                 # Fallback if DPA fails
                 print(f"  DPA failed, falling back to SDPA: {str(e)[:100]}")
+                print(f"  Shapes were - Q: {q.shape}, K: {k.shape}, V: {v.shape}")
                 self.use_fp8_attention = False
-                # Continue with fallback below
+                # Restore original tensors for fallback
+                q, k, v = q_orig, k_orig, v_orig
         
-        if not self.use_fp8_attention or not hasattr(self, 'dpa'):
+        if not dpa_succeeded:
             # Fallback to PyTorch SDPA (original path)
             # This needs [B, H, S, D] so we transpose
             q = q.transpose(1, 2)
