@@ -129,7 +129,7 @@ def prepare_dataset_quick():
     
     # Process HALF of the dataset for quick testing
     # OR process 1/4 if still too large
-    fraction = 0.5  # Change to 0.25 for 1/4 of dataset if needed
+    fraction = 0.1  # Change to 0.25 for 1/4 of dataset if needed
     num_docs = int(total_docs * fraction)
     print(f"Processing first {num_docs:,} documents ({fraction*100:.0f}% of dataset)")
     df = df.head(num_docs)
