@@ -3,6 +3,7 @@
 Prepare mixed-domain dataset for training.
 Processes half of the 3B token mixed dataset (~1.5B tokens).
 Dataset includes diverse content: text, code, math, etc.
+Memory-efficient version with streaming to disk.
 """
 
 import numpy as np
@@ -12,6 +13,8 @@ from transformers import AutoTokenizer
 import json
 from tqdm import tqdm
 import platform
+import tempfile
+import os
 
 def tokenize_batch_fast(texts, tokenizer, eos_token_id):
     """Fast batch tokenization without multiprocessing overhead."""
@@ -43,13 +46,14 @@ def tokenize_batch_fast(texts, tokenizer, eos_token_id):
 def prepare_dataset_quick():
     """
     Prepare mixed-domain dataset (half of 3B tokens).
-    More diverse than FineWeb-Edu - includes code, math, text.
+    Memory-efficient version that streams to disk.
     """
     
     print("="*60)
     print("MIXED-DOMAIN DATASET PREPARATION")
     print("Processing 1.5B tokens from mixed-pretrain-3b")
     print("With SmolLM2-135M Tokenizer")
+    print("Memory-efficient streaming version")
     print("="*60)
     
     # Load SmolLM2 tokenizer
@@ -99,11 +103,13 @@ def prepare_dataset_quick():
     # Load the single parquet file
     print(f"\nLoading mixed dataset from {data_file.name}...")
     print("This dataset contains diverse content: text, code, math, etc.")
-    print("Processing HALF of the 3B tokens (~1.5B tokens)")
     
     # Create output directory
     output_dir = Path('data_mixed_3b')
     output_dir.mkdir(exist_ok=True)
+    
+    # Create temporary file for streaming tokens
+    temp_tokens_file = output_dir / 'temp_tokens.bin'
     
     # Load and process the parquet file
     print("\nLoading parquet file...")
@@ -122,65 +128,115 @@ def prepare_dataset_quick():
     print(f"Total documents: {total_docs:,}")
     
     # Process HALF of the dataset for quick testing
-    half_docs = total_docs // 2
-    print(f"Processing first {half_docs:,} documents (50% of dataset)")
-    df = df.head(half_docs)
+    # OR process 1/4 if still too large
+    fraction = 0.5  # Change to 0.25 for 1/4 of dataset if needed
+    num_docs = int(total_docs * fraction)
+    print(f"Processing first {num_docs:,} documents ({fraction*100:.0f}% of dataset)")
+    df = df.head(num_docs)
     
     texts = df['text'].tolist()
-    total_chars = sum(len(text) for text in texts if pd.notna(text))
+    del df  # Free memory immediately
     
-    # Process in batches
-    print("\nTokenizing documents...")
-    all_train_tokens = []
-    batch_size = 5000
+    total_chars = 0
+    total_tokens = 0
     
-    for i in tqdm(range(0, len(texts), batch_size), desc="Processing batches"):
-        batch = texts[i:min(i+batch_size, len(texts))]
-        tokens = tokenize_batch_fast(batch, tokenizer, eos_token_id)
-        all_train_tokens.extend(tokens)
+    # Process in smaller batches and stream to disk
+    print("\nTokenizing documents (memory-efficient mode)...")
+    batch_size = 2500  # Smaller batch size to reduce memory
+    chunk_size = 100_000_000  # Write to disk every 100M tokens
+    current_chunk = []
+    
+    with open(temp_tokens_file, 'wb') as f:
+        for i in tqdm(range(0, len(texts), batch_size), desc="Processing batches"):
+            batch = texts[i:min(i+batch_size, len(texts))]
+            
+            # Track character count
+            for text in batch:
+                if pd.notna(text):
+                    total_chars += len(text)
+            
+            # Tokenize batch
+            tokens = tokenize_batch_fast(batch, tokenizer, eos_token_id)
+            current_chunk.extend(tokens)
+            
+            # Write chunk to disk when it gets large
+            if len(current_chunk) >= chunk_size:
+                # Convert to numpy and write
+                chunk_array = np.array(current_chunk, dtype=np.uint16)
+                chunk_array.tofile(f)
+                total_tokens += len(current_chunk)
+                print(f"  Written {total_tokens:,} tokens to disk...")
+                current_chunk = []  # Clear memory
         
-        if i % (batch_size * 10) == 0 and i > 0:
-            print(f"  Processed {i:,} docs, current tokens: {len(all_train_tokens):,}")
+        # Write remaining tokens
+        if current_chunk:
+            chunk_array = np.array(current_chunk, dtype=np.uint16)
+            chunk_array.tofile(f)
+            total_tokens += len(current_chunk)
     
-    # Convert to numpy array
-    print("\nConverting to numpy array...")
-    train_tokens = np.array(all_train_tokens, dtype=np.uint16)
+    print(f"\nTotal tokens written: {total_tokens:,}")
+    
+    # Now read back and split into train/val
+    print("\nSplitting into train/val sets...")
+    split_idx = int(total_tokens * 0.95)
+    
+    # Read and write train set
+    print("Writing training set...")
+    train_output = output_dir / 'train.bin'
+    with open(temp_tokens_file, 'rb') as infile:
+        with open(train_output, 'wb') as outfile:
+            # Copy first 95% of tokens
+            bytes_to_copy = split_idx * 2  # 2 bytes per uint16
+            chunk_size = 100 * 1024 * 1024  # 100MB chunks
+            copied = 0
+            while copied < bytes_to_copy:
+                to_read = min(chunk_size, bytes_to_copy - copied)
+                data = infile.read(to_read)
+                if not data:
+                    break
+                outfile.write(data)
+                copied += len(data)
+    
+    print("Writing validation set...")
+    val_output = output_dir / 'val.bin'
+    with open(temp_tokens_file, 'rb') as infile:
+        infile.seek(split_idx * 2)  # Skip training data
+        with open(val_output, 'wb') as outfile:
+            # Copy remaining tokens
+            while True:
+                data = infile.read(chunk_size)
+                if not data:
+                    break
+                outfile.write(data)
+    
+    # Clean up temp file
+    os.remove(temp_tokens_file)
+    
+    # Calculate final sizes
+    train_tokens = split_idx
+    val_tokens = total_tokens - split_idx
     
     print(f"\nDataset statistics:")
-    print(f"  Documents: {total_docs:,}")
-    print(f"  Total tokens: {len(train_tokens):,}")
+    print(f"  Documents: {num_docs:,}")
+    print(f"  Total tokens: {total_tokens:,}")
     print(f"  Total characters: {total_chars:,}")
-    if total_docs > 0:
-        print(f"  Avg tokens/doc: {len(train_tokens)/total_docs:.1f}")
-        print(f"  Avg chars/token: {total_chars/len(train_tokens):.2f}")
-    
-    # Split into train/val (95/5)
-    split_idx = int(len(train_tokens) * 0.95)
-    val_tokens = train_tokens[split_idx:]
-    train_tokens = train_tokens[:split_idx]
+    if num_docs > 0:
+        print(f"  Avg tokens/doc: {total_tokens/num_docs:.1f}")
+        print(f"  Avg chars/token: {total_chars/total_tokens:.2f}")
     
     print(f"\nFinal split:")
-    print(f"  Train: {len(train_tokens):,} tokens")
-    print(f"  Val: {len(val_tokens):,} tokens")
-    
-    # Save files
-    train_output = output_dir / 'train.bin'
-    train_tokens.astype(np.uint16).tofile(train_output)
-    print(f"\nSaved training data to {train_output}")
-    
-    val_output = output_dir / 'val.bin'
-    val_tokens.astype(np.uint16).tofile(val_output)
-    print(f"Saved validation data to {val_output}")
+    print(f"  Train: {train_tokens:,} tokens")
+    print(f"  Val: {val_tokens:,} tokens")
     
     # Save config
     config = {
         'dataset': 'mixed-pretrain-3b',
-        'mode': 'half_dataset',
+        'mode': f'{fraction:.0%}_dataset',
         'tokenizer': 'HuggingFaceTB/SmolLM2-135M',
         'vocab_size': len(tokenizer),
-        'train_tokens': len(train_tokens),
-        'val_tokens': len(val_tokens),
-        'total_documents': half_docs,
+        'train_tokens': train_tokens,
+        'val_tokens': val_tokens,
+        'total_documents': num_docs,
         'dataset_type': 'mixed-domain (text, code, math)',
     }
     
@@ -191,7 +247,7 @@ def prepare_dataset_quick():
     print("MIXED DATASET READY!")
     print("="*60)
     print(f"Output: {output_dir}")
-    print(f"Size: {len(train_tokens)/1e9:.1f}B tokens")
+    print(f"Size: {total_tokens/1e9:.1f}B tokens")
     print(f"Content: Mixed-domain (text, code, math)")
     print("\nTo test FP8 on RTX 5090:")
     print("  # Run FP8 training:")
