@@ -270,9 +270,10 @@ def train():
     
     # Compile model if requested
     if config.compile:
-        print(f"Compiling model with mode={config.compile_mode}...")
-        # Disable CUDA graphs to avoid warnings with TransformerEngine
-        model = torch.compile(model, mode=config.compile_mode,
+        print(f"Compiling model...")
+        # Use default mode with options to disable CUDA graphs (fixes TE warnings)
+        # Can't use both mode='max-autotune' and options together
+        model = torch.compile(model, mode='default',
                             options={"triton.cudagraphs": False})
     
     # Optimizer (AdamW)
