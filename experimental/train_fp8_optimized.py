@@ -309,7 +309,8 @@ def train():
         if config.fuse_wgrad_accumulation:
             for p in model.parameters():
                 if hasattr(p, 'main_grad') and p.requires_grad:
-                    p.grad = p.main_grad.clone()
+                    # Cast main_grad (FP32) to parameter dtype (BF16)
+                    p.grad = p.main_grad.to(p.dtype)
         
         # Gradient clipping
         if config.grad_clip > 0:
