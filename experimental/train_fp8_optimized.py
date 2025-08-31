@@ -178,7 +178,7 @@ def train():
     parser.add_argument('--batch_size', type=int, help='Batch size')
     parser.add_argument('--data_dir', type=str, default='data_mixed_3b', help='Data directory')
     parser.add_argument('--max_iters', type=int, default=2000, help='Max iterations')
-    parser.add_argument('--eval_interval', type=int, default=100, help='Eval interval')
+    parser.add_argument('--eval_interval', type=int, default=200, help='Eval interval')
     parser.add_argument('--log_interval', type=int, default=10, help='Log interval')
     parser.add_argument('--no_fp8', action='store_true', help='Disable FP8')
     parser.add_argument('--no_fusion', action='store_true', help='Disable gradient fusion (always disabled in CLEAN)')
