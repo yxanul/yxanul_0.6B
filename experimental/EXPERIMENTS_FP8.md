@@ -515,9 +515,41 @@ Key Finding: RTX 5090 supports standard DelayedScaling FP8, not MXFP8
 
 **Note**: This is believed to be the first public documentation of successful FP8 training on consumer hardware. The RTX 5090's ability to run datacenter-style FP8 at 196k tokens/sec (power-limited) fundamentally changes the accessibility of large-scale AI training.
 
+## IMPORTANT: Actual Best Configuration (December 2024)
+
+**⚠️ CRITICAL NOTE**: The "fixed" version (`train_fp8_fixed.py` + `model_te_fixed.py`) is actually SLOWER (185k tok/s) than the "broken" version below!
+
+### What Actually Works Best: 196k tokens/sec
+
+```bash
+# THIS IS THE FASTEST CONFIGURATION (196k tok/s)
+python train_fp8_optimized.py --batch_size 18 --no_fusion
+
+# Uses model_te_optimized.py which:
+# - Accepts is_first_microbatch but doesn't pass it to TE layers (bug!)
+# - With --no_fusion: Avoids gradient fusion overhead
+# - Still achieves best performance despite not properly implementing weight caching
+```
+
+### Why the "Broken" Version is Faster
+
+1. **model_te_optimized.py** doesn't properly pass `is_first_microbatch` to TE layers
+2. But with `--no_fusion`, it avoids the gradient accumulation overhead
+3. The simpler code path without proper weight caching is somehow faster
+4. Achieves **196k tokens/sec** at 575W power draw
+
+### Versions Tested and Results
+
+| Version | Model | Script | Speed | Notes |
+|---------|-------|--------|-------|-------|
+| **BEST** | model_te_optimized.py | train_fp8_optimized.py --no_fusion | **196k tok/s** | Broken but fastest! |
+| Fixed | model_te_fixed.py | train_fp8_fixed.py | 185k tok/s | Proper implementation but slower |
+| With fusion | model_te_optimized.py | train_fp8_optimized.py | 186k tok/s | Gradient fusion overhead |
+
 **Final Configuration for Maximum Performance**:
 - Use `train_fp8_optimized.py` with `--batch_size 18 --no_fusion`
+- Uses `model_te_optimized.py` (NOT the fixed version!)
 - Achieves 196k tokens/sec at 575W power draw
 - 96% memory utilization (optimal without OOM risk)
-- FP8 weight caching enabled (default)
+- FP8 weight caching NOT actually working (but still fastest!)
 - Gradient accumulation fusion disabled (overhead without benefit)
