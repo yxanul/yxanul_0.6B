@@ -130,6 +130,7 @@ class CleanAttention(nn.Module):
         self.n_head = config.n_head
         self.n_kv_heads = config.n_kv_heads
         self.head_dim = config.head_dim
+        self._attn_dropout_p = config.dropout
 
         # Fused QKV: [B, T, (H + 2*KV)*D]
         self.qkv = te.Linear(
@@ -201,19 +202,18 @@ class CleanAttention(nn.Module):
             if dpa_built is not None:
                 self.dpa = dpa_built
                 self._use_te_dpa = True
+                self._dpa_call_mode = None  # will be auto-detected on first forward
             else:
                 # Could not construct TE DPA with available signatures; fall back
                 print(
                     f"[model_te_v2] Falling back to PyTorch SDPA. TE DPA init failed with: {last_err}"
                 )
                 self._use_te_dpa = False
-                self._fallback_dropout = nn.Dropout(config.dropout)
-                self._fallback_dropout_p = config.dropout
+            self._fallback_dropout = nn.Dropout(config.dropout)
         else:
             # Fallback path: PyTorch SDPA (BF16), replicate KV
             self._use_te_dpa = False
             self._fallback_dropout = nn.Dropout(config.dropout)
-            self._fallback_dropout_p = config.dropout
 
     def forward(self, x, rope_cache):
         B, T, C = x.shape
@@ -231,20 +231,68 @@ class CleanAttention(nn.Module):
         k = RoPE.apply_rotary_pos_emb(k, rope_cache)
 
         if self._use_te_dpa:
-            # TE DPA expects [B, H, T, D]
-            q = q.transpose(1, 2)
-            k = k.transpose(1, 2)
-            v = v.transpose(1, 2)
-            # Under te.fp8_autocast, this executes in FP8 where supported
-            y = self.dpa(q, k, v)
-            # Back to [B, T, H, D]
-            y = y.transpose(1, 2).contiguous().view(B, T, self.n_head * self.head_dim)
-            # Output projection
-            y = self.o_proj(y)
-            # Apply dropout explicitly since some TE versions do not accept dropout in ctor
-            if self.training:
-                y = F.dropout(y, p=self._fallback_dropout_p, training=True)
-            return y
+            # Try multiple layout conventions and cache the first that works
+            def _call_dpa_with_mode(mode: str):
+                if mode == 'BHTD_BKVT':
+                    qh = q.transpose(1, 2).contiguous()             # [B,H,T,D]
+                    kh = k.transpose(1, 2).contiguous()             # [B,KV,T,D]
+                    vh = v.transpose(1, 2).contiguous()
+                elif mode == 'BTHD_BTKV':
+                    qh = q                                           # [B,T,H,D]
+                    kh = k                                           # [B,T,KV,D]
+                    vh = v
+                elif mode == 'BHTD_BGTD':
+                    # Grouped K/V to num_gqa_groups along heads dim after transpose
+                    groups = self.n_head // self.n_kv_heads
+                    idx = torch.remainder(torch.arange(groups, device=k.device), self.n_kv_heads)
+                    k_btgd = torch.index_select(k, dim=2, index=idx)  # [B,T,G,D]
+                    v_btgd = torch.index_select(v, dim=2, index=idx)
+                    qh = q.transpose(1, 2).contiguous()               # [B,H,T,D]
+                    kh = k_btgd.transpose(1, 2).contiguous()          # [B,G,T,D]
+                    vh = v_btgd.transpose(1, 2).contiguous()
+                elif mode == 'BTHD_BTGD':
+                    groups = self.n_head // self.n_kv_heads
+                    idx = torch.remainder(torch.arange(groups, device=k.device), self.n_kv_heads)
+                    kh = torch.index_select(k, dim=2, index=idx)      # [B,T,G,D]
+                    vh = torch.index_select(v, dim=2, index=idx)
+                    qh = q                                           # [B,T,H,D]
+                else:
+                    raise ValueError('Unknown DPA call mode')
+
+                y_local = self.dpa(qh, kh, vh)
+                # Convert back to [B, T, H*D]
+                if mode in ('BHTD_BKVT', 'BHTD_BGTD'):
+                    y_local = y_local.transpose(1, 2).contiguous()   # [B,T,H,D]
+                # if mode is BTHD_* already [B,T,H,D]
+                return y_local.reshape(B, T, self.n_head * self.head_dim)
+
+            if getattr(self, '_dpa_call_mode', None) is None:
+                last_err = None
+                for mode in ('BHTD_BKVT', 'BTHD_BTKV', 'BHTD_BGTD', 'BTHD_BTGD'):
+                    try:
+                        y = _call_dpa_with_mode(mode)
+                        self._dpa_call_mode = mode
+                        break
+                    except Exception as e:
+                        last_err = e
+                        y = None
+                        continue
+                if y is None:
+                    # Fall back to SDPA
+                    print(f"[model_te_v2] DPA forward failed across layouts; falling back to SDPA: {last_err}")
+                    self._use_te_dpa = False
+                    # proceed to fallback path below
+                else:
+                    y = self.o_proj(y)
+                    if self.training and self._attn_dropout_p > 0:
+                        y = F.dropout(y, p=self._attn_dropout_p, training=True)
+                    return y
+            else:
+                y = _call_dpa_with_mode(self._dpa_call_mode)
+                y = self.o_proj(y)
+                if self.training and self._attn_dropout_p > 0:
+                    y = F.dropout(y, p=self._attn_dropout_p, training=True)
+                return y
         else:
             # Fallback: PyTorch SDPA with KV head replication (BF16)
             q = q.transpose(1, 2)
@@ -264,7 +312,8 @@ class CleanAttention(nn.Module):
             )
             y = y.transpose(1, 2).contiguous().view(B, T, C)
             y = self.o_proj(y)
-            y = self._fallback_dropout(y)
+            if self.training and self._attn_dropout_p > 0:
+                y = self._fallback_dropout(y)
             return y
 
 
