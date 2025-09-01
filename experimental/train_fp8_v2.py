@@ -126,6 +126,62 @@ class DataLoader:
         y = batch[:, 1:].to(self.device, non_blocking=True).to(torch.long)
         return x, y
 
+    def get_batch_cpu_uint16(self, split, batch_size):
+        """Return pinned CPU uint16 tensors (x16, y16). Device transfer is caller's responsibility."""
+        data = self.train_data if split == "train" else self.val_data
+        max_start = len(data) - self.block_size - 1
+        if max_start <= 0:
+            raise RuntimeError(
+                f"Dataset too small for block_size={self.block_size}; len={len(data)}"
+            )
+        ix = torch.randint(max_start, (batch_size,))
+        indices = ix.unsqueeze(1) + self._offsets.unsqueeze(0)
+        batch_np = np.asarray(data[indices.numpy()], dtype=np.uint16)
+        batch = torch.from_numpy(batch_np).pin_memory()
+        return batch[:, :-1], batch[:, 1:]
+
+
+class Prefetcher:
+    """Asynchronous GPU prefetcher to overlap H2D copies with compute."""
+
+    def __init__(self, data_loader: DataLoader, batch_size: int, device: str = "cuda"):
+        self.dl = data_loader
+        self.bs = batch_size
+        self.device = device
+        self.stream = torch.cuda.Stream() if torch.cuda.is_available() else None
+        self._next = None
+        self._event = None
+
+    def preload(self):
+        if self.stream is None:
+            # CPU only fallback
+            x16, y16 = self.dl.get_batch_cpu_uint16("train", self.bs)
+            x = x16.to(self.device).to(torch.long)
+            y = y16.to(self.device).to(torch.long)
+            self._next = (x, y)
+            self._event = None
+            return
+
+        x16, y16 = self.dl.get_batch_cpu_uint16("train", self.bs)
+        with torch.cuda.stream(self.stream):
+            x = x16.to(self.device, non_blocking=True).to(torch.long)
+            y = y16.to(self.device, non_blocking=True).to(torch.long)
+        evt = torch.cuda.Event()
+        evt.record(self.stream)
+        self._next = (x, y)
+        self._event = evt
+
+    def next(self):
+        if self._next is None:
+            self.preload()
+        # Synchronize current stream with prefetch stream if needed
+        if self._event is not None:
+            torch.cuda.current_stream().wait_event(self._event)
+        x, y = self._next
+        # Schedule next prefetch immediately
+        self.preload()
+        return x, y
+
 
 def get_lr(iter_num, config: TrainingConfig):
     if iter_num < config.warmup_iters:
@@ -311,8 +367,12 @@ def train():
         optimizer.zero_grad(set_to_none=True)
 
         total_loss = 0.0
+        # Prefetcher: overlap copies with compute for more stable throughput
+        prefetcher = Prefetcher(data_loader, config.batch_size, config.device)
+        x, y = prefetcher.next()
         for micro_step in range(config.gradient_accumulation_steps):
-            x, y = data_loader.get_batch("train", config.batch_size)
+            if micro_step > 0:
+                x, y = prefetcher.next()
 
             use_fp8_now = config.use_fp8 and (iter_num >= config.fp8_warmup_steps)
             if use_fp8_now:
