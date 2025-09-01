@@ -185,6 +185,13 @@ def train():
     parser.add_argument("--eval_interval", type=int, default=200, help="Eval interval")
     parser.add_argument("--log_interval", type=int, default=10, help="Log interval")
     parser.add_argument("--no_fp8", action="store_true", help="Disable FP8")
+    parser.add_argument(
+        "--attention",
+        type=str,
+        default="auto",
+        choices=["auto", "dpa", "sdpa"],
+        help="Attention backend selection: auto tries TE DPA then falls back; dpa forces TE DPA; sdpa forces PyTorch SDPA",
+    )
     parser.add_argument("--no_wandb", action="store_true", help="Disable Weights & Biases logging")
     args = parser.parse_args()
 
@@ -216,6 +223,18 @@ def train():
     # Create v2 model
     model = CleanGPT_TE(model_config).to(config.device)
     model = model.to(torch.bfloat16)
+
+    # Prefer FlashAttention path for PyTorch SDPA when used
+    try:
+        torch.backends.cuda.sdp_kernel(enable_flash=True, enable_math=False, enable_mem_efficient=False)
+    except Exception:
+        pass
+    # Enable TF32 for additional speed on Ada/Ampere
+    try:
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+    except Exception:
+        pass
 
     # FP8 recipe
     fp8_recipe = get_fp8_recipe(model_config)
@@ -257,12 +276,15 @@ def train():
     print(f"Environment: TE={_te_version}, CUDA={torch.version.cuda}, cuDNN={cudnn_ver}")
     print("Status:")
     print(f"  - FP8 enabled: {config.use_fp8}")
-    try:
-        _use_te = getattr(model.transformer.h[0].attn, "_use_te_dpa", False)
-    except Exception:
-        _use_te = False
-    attn_backend = "TE cuDNN DPA (native GQA)" if _use_te else "PyTorch SDPA (BF16 fallback)"
-    print(f"  - Attention: {attn_backend}")
+    # Respect attention selection
+    if args.attention == "sdpa":
+        model.set_attention_backend("sdpa")
+    elif args.attention == "dpa":
+        model.set_attention_backend("te_dpa")
+    # Report
+    _backend_now = model.get_attention_backend()
+    attn_backend = "TE cuDNN DPA (native GQA)" if _backend_now == "te_dpa" else "PyTorch SDPA (BF16 fallback)"
+    print(f"  - Attention: {attn_backend} (requested: {args.attention})")
     print("  - Expected: higher tok/s than SDPA BF16")
     print(f"Batch size: {config.batch_size}")
     print(f"Gradient accumulation: {config.gradient_accumulation_steps}")
@@ -274,6 +296,11 @@ def train():
     best_val_loss = float("inf")
     t0 = time.time()
     tokens_processed = 0
+
+    # Auto-switch state
+    baseline_tps_samples = []  # tokens/sec when FP8 is off
+    fp8_tps_samples = []       # tokens/sec when FP8 is on
+    switched_to_sdpa = False
 
     for iter_num in range(config.max_iters):
         # LR schedule
@@ -328,6 +355,29 @@ def train():
             except Exception:
                 perplexity = float("inf")
 
+            # Track baseline vs fp8 throughput for auto mode
+            if args.attention == "auto":
+                if use_fp8_now:
+                    fp8_tps_samples.append(tokens_per_sec)
+                else:
+                    baseline_tps_samples.append(tokens_per_sec)
+
+                # After enough samples, if FP8+DPA underperforms baseline by >10%, switch to SDPA
+                if (
+                    not switched_to_sdpa
+                    and len(baseline_tps_samples) >= 3
+                    and len(fp8_tps_samples) >= 3
+                    and model.get_attention_backend() == "te_dpa"
+                ):
+                    base_avg = sum(baseline_tps_samples[-3:]) / 3
+                    fp8_avg = sum(fp8_tps_samples[-3:]) / 3
+                    if fp8_avg < 0.9 * base_avg:
+                        print(
+                            f"[train_fp8_v2] Auto-switch: FP8 DPA avg {fp8_avg/1e3:.1f}k < 0.9 * baseline {base_avg/1e3:.1f}k; switching to SDPA"
+                        )
+                        model.set_attention_backend("sdpa")
+                        switched_to_sdpa = True
+
             logger.log_metrics(
                 {
                     "train/loss": avg_loss,
@@ -375,6 +425,10 @@ def train():
                     val_loss,
                     Path(config.checkpoint_dir) / "best_model_fp8_v2.pt",
                 )
+
+            # Do not count eval time in throughput
+            tokens_processed = 0
+            t0 = time.time()
 
         # Regular checkpoints
         if iter_num % config.checkpoint_interval == 0 and iter_num > 0:

@@ -430,6 +430,29 @@ class CleanGPT_TE(nn.Module):
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
+    # Backend controls
+    def set_attention_backend(self, backend: str):
+        """Switch attention backend across all blocks.
+
+        backend: 'te_dpa' or 'sdpa'
+        """
+        backend = backend.lower()
+        if backend not in ("te_dpa", "sdpa"):
+            raise ValueError("backend must be 'te_dpa' or 'sdpa'")
+        for blk in self.transformer.h:
+            attn = blk.attn
+            if backend == "te_dpa" and hasattr(attn, "dpa") and attn.dpa is not None:
+                attn._use_te_dpa = True
+            else:
+                attn._use_te_dpa = False
+
+    def get_attention_backend(self) -> str:
+        try:
+            attn = self.transformer.h[0].attn
+            return "te_dpa" if getattr(attn, "_use_te_dpa", False) else "sdpa"
+        except Exception:
+            return "sdpa"
+
     def num_parameters(self):
         return sum(p.numel() for p in self.parameters() if p.requires_grad)
 
