@@ -146,22 +146,55 @@ class CleanAttention(nn.Module):
         )
 
         if TE_DPA is not None:
-            # Try minimal constructor signatures (no dropout in ctor) across TE versions
+            # Try constructor signatures across TE versions.
+            # Many builds require: num_attention_heads and kv_channels (head_dim).
             self._use_te_dpa = False
             dpa_built = None
             last_err = None
-            candidates = (
-                dict(num_attention_heads=self.n_head, num_kv_heads=self.n_kv_heads, attn_mask_type="causal"),
-                dict(num_attention_heads=self.n_head, num_key_value_heads=self.n_kv_heads, attn_mask_type="causal"),
-                dict(num_attention_heads=self.n_head, num_gqa_groups=self.n_head // self.n_kv_heads, attn_mask_type="causal"),
-                dict(attn_mask_type="causal"),
-                dict(),
+
+            mask_options = (
+                {"attn_mask_type": "causal"},
+                {"attention_mask_type": "causal"},
+                {"is_causal": True},
+                {},
             )
-            for kwargs in candidates:
+
+            # Build candidate kwargs
+            candidate_kwargs = []
+            base_with_kv = {
+                "num_attention_heads": self.n_head,
+                "kv_channels": self.head_dim,
+            }
+            # With kv heads variants
+            for mask_kw in mask_options:
+                candidate_kwargs.append({**base_with_kv, "num_kv_heads": self.n_kv_heads, **mask_kw})
+                candidate_kwargs.append({**base_with_kv, "num_key_value_heads": self.n_kv_heads, **mask_kw})
+                candidate_kwargs.append({**base_with_kv, "num_gqa_groups": self.n_head // self.n_kv_heads, **mask_kw})
+                candidate_kwargs.append({**base_with_kv, **mask_kw})
+
+            # Also try alternative name for kv_channels
+            base_with_head_dim = {
+                "num_attention_heads": self.n_head,
+                "head_dim": self.head_dim,
+            }
+            for mask_kw in mask_options:
+                candidate_kwargs.append({**base_with_head_dim, "num_kv_heads": self.n_kv_heads, **mask_kw})
+                candidate_kwargs.append({**base_with_head_dim, "num_key_value_heads": self.n_kv_heads, **mask_kw})
+                candidate_kwargs.append({**base_with_head_dim, "num_gqa_groups": self.n_head // self.n_kv_heads, **mask_kw})
+                candidate_kwargs.append({**base_with_head_dim, **mask_kw})
+
+            # Minimal fallbacks
+            candidate_kwargs.append({})
+
+            for kwargs in candidate_kwargs:
                 try:
                     dpa_built = TE_DPA(**kwargs)
                     break
                 except TypeError as e:
+                    last_err = e
+                    dpa_built = None
+                    continue
+                except Exception as e:
                     last_err = e
                     dpa_built = None
                     continue
