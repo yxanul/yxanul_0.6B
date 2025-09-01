@@ -146,14 +146,42 @@ class CleanAttention(nn.Module):
         )
 
         if TE_DPA is not None:
-            # TE cuDNN attention handles GQA and attention dropout internally
-            self.dpa = TE_DPA(
-                num_attention_heads=self.n_head,
-                num_kv_heads=self.n_kv_heads,
-                attention_dropout=config.dropout,
-                attn_mask_type="causal",
-            )
-            self._use_te_dpa = True
+            # Try multiple constructor signatures across TE versions
+            self._use_te_dpa = False
+            dpa_built = None
+            last_err = None
+            dropout_keys = ("attention_dropout", "p_dropout", "dropout_p", "dropout")
+            mask_options = (dict(attn_mask_type="causal"), dict(is_causal=True))
+            for dk in dropout_keys:
+                for mask_kw in mask_options:
+                    # Candidate kw-sets for kv heads or gqa groups
+                    candidates = (
+                        dict(num_attention_heads=self.n_head, num_kv_heads=self.n_kv_heads, **{dk: config.dropout}, **mask_kw),
+                        dict(num_attention_heads=self.n_head, num_key_value_heads=self.n_kv_heads, **{dk: config.dropout}, **mask_kw),
+                        dict(num_attention_heads=self.n_head, num_kv=self.n_kv_heads, **{dk: config.dropout}, **mask_kw),
+                        dict(num_attention_heads=self.n_head, num_gqa_groups=self.n_head // self.n_kv_heads, **{dk: config.dropout}, **mask_kw),
+                    )
+                    for kwargs in candidates:
+                        try:
+                            dpa_built = TE_DPA(**kwargs)
+                            break
+                        except TypeError as e:
+                            last_err = e
+                            dpa_built = None
+                            continue
+                    if dpa_built is not None:
+                        break
+                if dpa_built is not None:
+                    break
+            if dpa_built is not None:
+                self.dpa = dpa_built
+                self._use_te_dpa = True
+            else:
+                # Could not construct TE DPA with available signatures; fall back
+                # print(f"[model_te_v2] TE DPA unavailable: {last_err}")
+                self._use_te_dpa = False
+                self._fallback_dropout = nn.Dropout(config.dropout)
+                self._fallback_dropout_p = config.dropout
         else:
             # Fallback path: PyTorch SDPA (BF16), replicate KV
             self._use_te_dpa = False
@@ -304,7 +332,13 @@ class CleanGPT_TE(nn.Module):
         print(
             f"  Arch: {config.n_layer}L, {config.n_head}H, {config.n_embd}D | GQA: {config.n_kv_heads}"
         )
-        print("  Attention backend: TE cuDNN DPA (FP8 where enabled); fallback SDPA if unavailable")
+        # Detect active attention backend
+        try:
+            use_te = getattr(self.transformer.h[0].attn, "_use_te_dpa", False)
+        except Exception:
+            use_te = False
+        backend_str = "TE cuDNN DPA (FP8)" if use_te else "PyTorch SDPA (BF16 fallback)"
+        print(f"  Attention backend: {backend_str}")
 
     def _init_weights(self, module):
         if isinstance(module, (nn.Linear, te.Linear)):
@@ -368,4 +402,3 @@ if __name__ == "__main__":
         print("CUDA not available. FP8 requires GPU.")
         import sys
         sys.exit(0)
-
