@@ -237,8 +237,7 @@ def train():
         config=asdict(config)
     )
     
-    # Watch model gradients (optional)
-    logger.watch(model, log="gradients", log_freq=100)
+    # NOTE: Not logging gradients - adds unnecessary overhead for 110+ parameters
     
     # Create checkpoint directory
     Path(config.checkpoint_dir).mkdir(exist_ok=True)
