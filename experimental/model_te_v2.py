@@ -307,7 +307,7 @@ class CleanAttention(nn.Module):
                 k,
                 v,
                 attn_mask=None,
-                dropout_p=0.0 if not self.training else self._fallback_dropout_p,
+                dropout_p=0.0 if not self.training else self._attn_dropout_p,
                 is_causal=True,
             )
             y = y.transpose(1, 2).contiguous().view(B, T, C)
