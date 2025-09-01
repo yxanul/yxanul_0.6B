@@ -146,33 +146,25 @@ class CleanAttention(nn.Module):
         )
 
         if TE_DPA is not None:
-            # Try multiple constructor signatures across TE versions
+            # Try minimal constructor signatures (no dropout in ctor) across TE versions
             self._use_te_dpa = False
             dpa_built = None
             last_err = None
-            dropout_keys = ("attention_dropout", "p_dropout", "dropout_p", "dropout")
-            mask_options = (dict(attn_mask_type="causal"), dict(is_causal=True))
-            for dk in dropout_keys:
-                for mask_kw in mask_options:
-                    # Candidate kw-sets for kv heads or gqa groups
-                    candidates = (
-                        dict(num_attention_heads=self.n_head, num_kv_heads=self.n_kv_heads, **{dk: config.dropout}, **mask_kw),
-                        dict(num_attention_heads=self.n_head, num_key_value_heads=self.n_kv_heads, **{dk: config.dropout}, **mask_kw),
-                        dict(num_attention_heads=self.n_head, num_kv=self.n_kv_heads, **{dk: config.dropout}, **mask_kw),
-                        dict(num_attention_heads=self.n_head, num_gqa_groups=self.n_head // self.n_kv_heads, **{dk: config.dropout}, **mask_kw),
-                    )
-                    for kwargs in candidates:
-                        try:
-                            dpa_built = TE_DPA(**kwargs)
-                            break
-                        except TypeError as e:
-                            last_err = e
-                            dpa_built = None
-                            continue
-                    if dpa_built is not None:
-                        break
-                if dpa_built is not None:
+            candidates = (
+                dict(num_attention_heads=self.n_head, num_kv_heads=self.n_kv_heads, attn_mask_type="causal"),
+                dict(num_attention_heads=self.n_head, num_key_value_heads=self.n_kv_heads, attn_mask_type="causal"),
+                dict(num_attention_heads=self.n_head, num_gqa_groups=self.n_head // self.n_kv_heads, attn_mask_type="causal"),
+                dict(attn_mask_type="causal"),
+                dict(),
+            )
+            for kwargs in candidates:
+                try:
+                    dpa_built = TE_DPA(**kwargs)
                     break
+                except TypeError as e:
+                    last_err = e
+                    dpa_built = None
+                    continue
             if dpa_built is not None:
                 self.dpa = dpa_built
                 self._use_te_dpa = True
@@ -214,8 +206,11 @@ class CleanAttention(nn.Module):
             y = self.dpa(q, k, v)
             # Back to [B, T, H, D]
             y = y.transpose(1, 2).contiguous().view(B, T, self.n_head * self.head_dim)
-            # Output projection (no extra dropout here; DPA applied attention dropout)
+            # Output projection
             y = self.o_proj(y)
+            # Apply dropout explicitly since some TE versions do not accept dropout in ctor
+            if self.training:
+                y = F.dropout(y, p=self._fallback_dropout_p, training=True)
             return y
         else:
             # Fallback: PyTorch SDPA with KV head replication (BF16)

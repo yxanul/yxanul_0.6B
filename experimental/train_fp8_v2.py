@@ -257,7 +257,12 @@ def train():
     print(f"Environment: TE={_te_version}, CUDA={torch.version.cuda}, cuDNN={cudnn_ver}")
     print("Status:")
     print(f"  - FP8 enabled: {config.use_fp8}")
-    print("  - Attention: TE cuDNN DPA (native GQA)")
+    try:
+        _use_te = getattr(model.transformer.h[0].attn, "_use_te_dpa", False)
+    except Exception:
+        _use_te = False
+    attn_backend = "TE cuDNN DPA (native GQA)" if _use_te else "PyTorch SDPA (BF16 fallback)"
+    print(f"  - Attention: {attn_backend}")
     print("  - Expected: higher tok/s than SDPA BF16")
     print(f"Batch size: {config.batch_size}")
     print(f"Gradient accumulation: {config.gradient_accumulation_steps}")
