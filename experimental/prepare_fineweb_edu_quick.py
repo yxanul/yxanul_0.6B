@@ -128,7 +128,7 @@ def prepare_dataset_quick():
     print(f"Total documents: {total_docs:,}")
     
     # Process FULL dataset for proper training
-    fraction = 0.1  # Use entire dataset for real training
+    fraction = 1.0  # Use entire dataset for real training
     num_docs = int(total_docs * fraction)
     print(f"Processing {num_docs:,} documents ({fraction*100:.0f}% of dataset)")
     df = df.head(num_docs)
