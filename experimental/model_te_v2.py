@@ -178,7 +178,9 @@ class CleanAttention(nn.Module):
                 self._use_te_dpa = True
             else:
                 # Could not construct TE DPA with available signatures; fall back
-                # print(f"[model_te_v2] TE DPA unavailable: {last_err}")
+                print(
+                    f"[model_te_v2] Falling back to PyTorch SDPA. TE DPA init failed with: {last_err}"
+                )
                 self._use_te_dpa = False
                 self._fallback_dropout = nn.Dropout(config.dropout)
                 self._fallback_dropout_p = config.dropout

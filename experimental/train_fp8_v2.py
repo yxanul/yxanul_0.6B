@@ -22,11 +22,21 @@ import torch
 import torch.nn.functional as F
 import numpy as np
 
+# Force TE to prefer cuDNN/DPA attention backend (0 = cuDNN, 1 = Flash)
+# Do this BEFORE importing any TE modules or the model.
+os.environ["NVTE_FUSED_ATTN_BACKEND"] = "0"
+
 # Import v2 model (FP8 attention via TE cuDNN DPA)
 from model_te_v2 import ModelConfig, CleanGPT_TE, get_fp8_recipe
 
 # TransformerEngine
 import transformer_engine.pytorch as te
+try:
+    import transformer_engine as te_base  # for version
+    _te_version = getattr(te_base, "__version__", "unknown")
+except Exception:
+    te_base = None
+    _te_version = "unknown"
 
 # WandB logger
 from wandb_logger import WandBLogger
@@ -240,6 +250,11 @@ def train():
     print("=" * 50)
     print(f"Model: {model_config.n_layer}L, {model_config.n_head}H, {model_config.n_embd}D")
     print(f"Parameters: {model.num_parameters()/1e6:.1f}M")
+    try:
+        cudnn_ver = torch.backends.cudnn.version()
+    except Exception:
+        cudnn_ver = None
+    print(f"Environment: TE={_te_version}, CUDA={torch.version.cuda}, cuDNN={cudnn_ver}")
     print("Status:")
     print(f"  - FP8 enabled: {config.use_fp8}")
     print("  - Attention: TE cuDNN DPA (native GQA)")
@@ -394,4 +409,3 @@ def train():
 
 if __name__ == "__main__":
     train()
-
