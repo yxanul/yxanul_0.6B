@@ -29,13 +29,8 @@ from model_te_clean import ModelConfig, CleanGPT_TE, get_fp8_recipe
 # TransformerEngine
 import transformer_engine.pytorch as te
 
-# Check for wandb
-try:
-    import wandb
-    WANDB_AVAILABLE = True
-except ImportError:
-    WANDB_AVAILABLE = False
-    print("Note: wandb not available")
+# Import our robust wandb logger
+from wandb_logger import WandBLogger
 
 
 @dataclass
@@ -182,6 +177,7 @@ def train():
     parser.add_argument('--log_interval', type=int, default=10, help='Log interval')
     parser.add_argument('--no_fp8', action='store_true', help='Disable FP8')
     parser.add_argument('--no_fusion', action='store_true', help='Disable gradient fusion (always disabled in CLEAN)')
+    parser.add_argument('--no_wandb', action='store_true', help='Disable Weights & Biases logging')
     # Removed --no_caching as it's not implemented in CLEAN version
     args = parser.parse_args()
     
@@ -233,13 +229,16 @@ def train():
     # Data loader
     data_loader = DataLoader(config.data_dir, config.block_size, config.device)
     
-    # Wandb
-    if WANDB_AVAILABLE:
-        wandb.init(
-            project=config.wandb_project,
-            name=config.wandb_run_name or f"fp8_optimized_{config.n_layer}L",
-            config=asdict(config)
-        )
+    # Initialize WandB logger
+    logger = WandBLogger(
+        enabled=not args.no_wandb,  # Enable by default unless explicitly disabled
+        project=config.wandb_project,
+        run_name=config.wandb_run_name or f"fp8_clean_{config.n_layer}L_{config.batch_size}b",
+        config=asdict(config)
+    )
+    
+    # Watch model gradients (optional)
+    logger.watch(model, log="gradients", log_freq=100)
     
     # Create checkpoint directory
     Path(config.checkpoint_dir).mkdir(exist_ok=True)
@@ -319,14 +318,23 @@ def train():
             print(f"iter {iter_num}: loss {avg_loss:.4f}, lr {lr:.2e}, "
                   f"{tokens_per_sec/1e3:.1f}k tok/s, FP8: {use_fp8_now}")
             
-            if WANDB_AVAILABLE:
-                wandb.log({
-                    'train/loss': avg_loss,
-                    'train/lr': lr,
-                    'train/tokens_per_sec': tokens_per_sec,
-                    'train/grad_norm': grad_norm.item() if config.grad_clip > 0 else 0,
-                    'train/fp8_active': use_fp8_now,
-                }, step=iter_num)
+            # Calculate perplexity
+            try:
+                perplexity = math.exp(min(20.0, avg_loss))
+            except:
+                perplexity = float('inf')
+            
+            # Log comprehensive metrics
+            logger.log_metrics({
+                'train/loss': avg_loss,
+                'train/perplexity': perplexity,
+                'train/lr': lr,
+                'train/tokens_per_sec': tokens_per_sec,
+                'train/grad_norm': grad_norm.item() if config.grad_clip > 0 else 0,
+                'train/fp8_active': use_fp8_now,
+                'train/gpu_memory_gb': torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0,
+                'train/iteration': iter_num,
+            }, step=iter_num)
             
             tokens_processed = 0
             t0 = time.time()
@@ -336,8 +344,25 @@ def train():
             val_loss = evaluate(model, data_loader, config, fp8_recipe)
             print(f"Step {iter_num}: val loss {val_loss:.4f}")
             
-            if WANDB_AVAILABLE:
-                wandb.log({'val/loss': val_loss}, step=iter_num)
+            # Calculate validation perplexity
+            try:
+                val_perplexity = math.exp(min(20.0, val_loss))
+            except:
+                val_perplexity = float('inf')
+            
+            # Log validation metrics
+            logger.log_metrics({
+                'val/loss': val_loss,
+                'val/perplexity': val_perplexity,
+            }, step=iter_num)
+            
+            # Update best metrics in summary
+            if val_loss < best_val_loss:
+                logger.set_summary(
+                    best_val_loss=val_loss,
+                    best_val_perplexity=val_perplexity,
+                    best_iter=iter_num
+                )
             
             # Save best model
             if val_loss < best_val_loss:
@@ -354,11 +379,30 @@ def train():
                 Path(config.checkpoint_dir) / f'checkpoint_{iter_num}_fp8_optimized.pt'
             )
     
+    # Final summary
+    final_val_loss = evaluate(model, data_loader, config, fp8_recipe)
+    try:
+        final_perplexity = math.exp(min(20.0, final_val_loss))
+    except:
+        final_perplexity = float('inf')
+    
+    logger.set_summary(
+        final_val_loss=final_val_loss,
+        final_perplexity=final_perplexity,
+        total_iterations=config.max_iters,
+        model_params=model.num_parameters()
+    )
+    
     print("\n" + "="*50)
     print("Training Complete!")
     print(f"Best validation loss: {best_val_loss:.4f}")
+    print(f"Final validation loss: {final_val_loss:.4f}")
+    print(f"Final perplexity: {final_perplexity:.2f}")
     print("CLEAN implementation - simplicity wins at this scale!")
     print("="*50)
+    
+    # Clean up wandb
+    logger.finish()
 
 
 if __name__ == "__main__":
