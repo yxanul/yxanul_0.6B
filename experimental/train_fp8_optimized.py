@@ -59,10 +59,10 @@ class TrainingConfig:
     max_iters: int = 2000
     eval_interval: int = 100
     eval_iters: int = 50
-    learning_rate: float = 3e-4
-    min_lr: float = 3e-5
+    learning_rate: float = 8e-4
+    min_lr: float = 1e-4
     warmup_iters: int = 200
-    lr_decay_iters: int = 2000
+    lr_decay_iters: int = 4000
     grad_clip: float = 1.0
     weight_decay: float = 0.1
     beta1: float = 0.9
