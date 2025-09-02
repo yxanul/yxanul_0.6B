@@ -142,6 +142,9 @@ def process_parquet_dataset(input_file: str, output_dir: str, tokenizer, max_len
             if isinstance(messages, str):
                 # Parse JSON string
                 messages = json.loads(messages)
+            elif isinstance(messages, np.ndarray):
+                # Convert numpy array to list
+                messages = messages.tolist()
             elif isinstance(messages, list):
                 # Already a list
                 pass
