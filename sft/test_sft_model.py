@@ -128,8 +128,8 @@ def generate_response(model, tokenizer, user_input, max_new_tokens=150, temperat
         # Append
         generated_ids = torch.cat([generated_ids, next_token], dim=1)
         
-        # Check for EOS
-        if next_token.item() == tokenizer.eos_token_id:
+        # Check for EOS (fixed for ID=0)
+        if tokenizer.eos_token_id is not None and next_token.item() == tokenizer.eos_token_id:
             break
         
         # Print progress dots sparingly
