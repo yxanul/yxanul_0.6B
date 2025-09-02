@@ -31,6 +31,13 @@ def load_sft_model(checkpoint_path='checkpoints_sft/best_sft_model.pt'):
     # Create model
     model = GPTInference(config)
     
+    # Move to GPU if available
+    if torch.cuda.is_available():
+        model = model.cuda()
+        print(f"  Using GPU: {torch.cuda.get_device_name(0)}")
+    else:
+        print("  ⚠️  WARNING: Running on CPU - will be slow!")
+    
     # Load checkpoint
     checkpoint_info = model.load_from_te_checkpoint(checkpoint_path)
     
@@ -63,6 +70,10 @@ def generate_response(model, tokenizer, user_input, max_new_tokens=150, temperat
     
     # Encode prompt
     input_ids = tokenizer.encode(prompt, return_tensors='pt', add_special_tokens=False)
+    
+    # Move to same device as model
+    if next(model.parameters()).is_cuda:
+        input_ids = input_ids.cuda()
     
     print(f"\n👤 User: {user_input}")
     print("🤖 Assistant: ", end="", flush=True)
