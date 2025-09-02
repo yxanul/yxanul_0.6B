@@ -1,0 +1,17 @@
+{
+  "tokenizer": "HuggingFaceTB/SmolLM2-135M",
+  "max_length": 2048,
+  "total_examples": 59233,
+  "train_examples": 56271,
+  "val_examples": 2962,
+  "train_tokens": 9824798,
+  "val_tokens": 506682,
+  "vocab_size": 49152,
+  "eos_token_id": 0,
+  "bos_token_id": 0,
+  "sources": {
+    "alpaca": true,
+    "gsm8k": true
+  },
+  "format": "clean_sft_with_eos"
+}
