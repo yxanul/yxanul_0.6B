@@ -52,7 +52,7 @@ class SFTConfig:
     eval_iters: int = 20
     learning_rate: float = 3e-4  # Aggressive SFT learning rate
     min_lr: float = 5e-5
-    warmup_iters: int = 100  # Quick warmup
+    warmup_iters: int = 5  # Very quick warmup for short SFT
     lr_decay_iters: int = 3000
     grad_clip: float = 1.0
     weight_decay: float = 0.1
