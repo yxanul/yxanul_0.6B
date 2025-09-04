@@ -40,6 +40,14 @@ except ImportError:
     FLASH_AVAILABLE = False
     print("[INFO] Flash Attention not available - using memory-efficient fallback")
 
+# Set PyTorch SDPA kernel preferences for optimal performance
+import torch
+if hasattr(torch.backends, 'cuda'):
+    torch.backends.cuda.enable_flash_sdp(True)
+    torch.backends.cuda.enable_mem_efficient_sdp(True)
+    torch.backends.cuda.enable_math_sdp(False)  # Disable slow math fallback
+    print("[INFO] SDPA kernels configured: Flash=True, MemEfficient=True, Math=False")
+
 
 # -----------------------------------------------------------------------------
 # FP8 recipe helper (you'll use this in your training loop, not inside the model)
@@ -204,6 +212,13 @@ class OptimizedAttention(nn.Module):
         if self.use_qk_norm:
             self.qk_norm = QKNorm(self.head_dim)
         self.partial_rope_ratio = float(config.partial_rope_ratio)
+        
+        # Enforce Flash Attention for GQA
+        if self.n_kv_heads != self.n_head and not FLASH_AVAILABLE:
+            raise RuntimeError(
+                f"GQA (n_head={self.n_head}, n_kv_heads={self.n_kv_heads}) requires Flash Attention. "
+                "Install with: pip install flash-attn --no-build-isolation"
+            )
 
     def forward(self, x: torch.Tensor, rope_cache: torch.Tensor):
         B, T, C = x.shape
@@ -332,11 +347,11 @@ class PyramidResidualMoE(nn.Module):
         self.experts = nn.ModuleList()
         for r in ratios:
             h = int(round(C * float(r) / 64) * 64)
-            # Use regular nn.Linear for experts to avoid cuBLAS issues with variable batch sizes
+            # Use te.Linear for experts - we now pad properly so FP8 will work
             self.experts.append(nn.ModuleDict(dict(
-                gate = nn.Linear(C, h, bias=config.bias),
-                up   = nn.Linear(C, h, bias=config.bias),
-                down = nn.Linear(h, C, bias=config.bias),
+                gate = te.Linear(C, h, bias=config.bias, params_dtype=torch.bfloat16),
+                up   = te.Linear(C, h, bias=config.bias, params_dtype=torch.bfloat16),
+                down = te.Linear(h, C, bias=config.bias, params_dtype=torch.bfloat16),
             )))
 
     # ----- helpers -----
