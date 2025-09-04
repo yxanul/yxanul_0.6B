@@ -263,7 +263,7 @@ class OptimizedTop2Router(nn.Module):
         # Fraction of tokens per expert
         me = gates.mean(dim=0)  # [E]
         ce = torch.zeros_like(me)
-        ce.scatter_add_(0, top2_idx[:, 0], torch.ones(N, device=x.device) / N)
+        ce.scatter_add_(0, top2_idx[:, 0], torch.ones(N, device=x.device, dtype=ce.dtype) / N)
         aux_loss = (self.num_experts * (me * ce).sum())
         
         # Router z-loss (prevents logit explosion)
@@ -274,7 +274,7 @@ class OptimizedTop2Router(nn.Module):
         
         # Build dispatch mask efficiently
         dispatch_mask = torch.zeros(N, self.num_experts, 2, device=x.device, dtype=torch.bool)
-        combine_weights = torch.zeros(N, self.num_experts, 2, device=x.device, dtype=x.dtype)
+        combine_weights = torch.zeros(N, self.num_experts, 2, device=x.device, dtype=gates.dtype)
         
         for k in range(2):
             # Count tokens per expert
@@ -371,9 +371,9 @@ class MoEFeedForward(nn.Module):
             expert_input = x_flat[expert_mask]
             expert_output = expert(expert_input)
             
-            # Combine with weights
+            # Combine with weights - ensure dtype match
             weights = combine_weights[expert_mask, e, :].sum(dim=-1, keepdim=True)
-            output[expert_mask] += expert_output * weights
+            output[expert_mask] = output[expert_mask] + (expert_output * weights).to(output.dtype)
         
         output = output.view(B, T, C)
         output = self.dropout(output)
