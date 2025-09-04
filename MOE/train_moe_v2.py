@@ -20,6 +20,7 @@ import argparse
 from contextlib import nullcontext
 
 from model_moe_v2 import MoEConfig, MoEModelV2
+from wandb_logger_moe import WandBLogger
 
 
 class DataLoader:
@@ -120,15 +121,19 @@ class Trainer:
             "total": [],
         }
         
-        # Wandb
+        # Wandb logger
         self.use_wandb = config.get("wandb", False)
-        if self.use_wandb:
-            import wandb
-            wandb.init(
-                project=config.get("wandb_project", "moe-v2"),
-                name=config.get("wandb_run_name", None),
-                config=config
-            )
+        self.wandb_logger = WandBLogger(
+            enabled=self.use_wandb,
+            project=config.get("wandb_project", "moe-v2"),
+            run_name=config.get("wandb_run_name", None),
+            config=config,
+            mode=config.get("wandb_mode", "online")
+        )
+        
+        # Optionally watch model gradients
+        if self.use_wandb and config.get("wandb_watch_model", False):
+            self.wandb_logger.watch(self.model, log="all", log_freq=100)
     
     def configure_optimizer(self):
         """Configure AdamW optimizer with weight decay."""
@@ -278,8 +283,7 @@ class Trainer:
             print(f"  Perplexity: {val_metrics['val_perplexity']:.2f}")
             
             if self.use_wandb:
-                import wandb
-                wandb.log(val_metrics, step=self.step)
+                self.wandb_logger.log_metrics(val_metrics, step=self.step)
     
     def log_metrics(self, loss: float, lr: float):
         """Log training metrics."""
@@ -306,8 +310,7 @@ class Trainer:
               f"opt={avg_optimizer:.1f}, total={avg_total:.1f}")
         
         if self.use_wandb:
-            import wandb
-            wandb.log({
+            self.wandb_logger.log_metrics({
                 "train/loss": loss,
                 "train/perplexity": np.exp(loss),
                 "train/lr": lr,
@@ -339,6 +342,10 @@ class Trainer:
         print(f"\nTraining completed!")
         print(f"  Final step: {self.step}")
         print(f"  Total tokens: {self.tokens_seen/1e9:.2f}B")
+        
+        # Finish wandb run
+        if self.use_wandb:
+            self.wandb_logger.finish()
     
     def save_checkpoint(self):
         """Save model checkpoint."""
@@ -405,6 +412,8 @@ def main():
     parser.add_argument("--wandb", action="store_true", help="Use Weights & Biases logging")
     parser.add_argument("--wandb_project", type=str, default="moe-v2", help="W&B project name")
     parser.add_argument("--wandb_run_name", type=str, default=None, help="W&B run name")
+    parser.add_argument("--wandb_mode", type=str, default="online", choices=["online", "offline"], help="W&B mode")
+    parser.add_argument("--wandb_watch_model", action="store_true", help="Watch model gradients in W&B")
     
     args = parser.parse_args()
     
