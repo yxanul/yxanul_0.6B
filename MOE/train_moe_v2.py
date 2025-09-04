@@ -32,12 +32,12 @@ class DataLoader:
         
         # Load tokenized data
         self.train_tokens = np.memmap(
-            os.path.join(data_dir, "train_tokens.bin"),
+            os.path.join(data_dir, "train.bin"),
             dtype=np.uint16,
             mode='r'
         )
         self.val_tokens = np.memmap(
-            os.path.join(data_dir, "val_tokens.bin"),
+            os.path.join(data_dir, "val.bin"),
             dtype=np.uint16,
             mode='r'
         )
@@ -389,7 +389,7 @@ def main():
     parser.add_argument("--min_lr", type=float, default=6e-5, help="Minimum learning rate")
     
     # Data
-    parser.add_argument("--data_dir", type=str, default="data", help="Data directory")
+    parser.add_argument("--data_dir", type=str, default="data_mixed_3b", help="Data directory")
     
     # Optimization
     parser.add_argument("--use_amp", action="store_true", help="Use mixed precision")
