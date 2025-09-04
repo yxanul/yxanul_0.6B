@@ -51,6 +51,7 @@ class MoEConfig:
     use_fp8: bool = True
     fp8_amax_history_len: int = 16
     fp8_amax_compute_algo: str = "max"
+    fp8_pad_for_moe: bool = True  # Pad expert inputs for FP8 alignment
     
     # MoE configuration
     num_experts: int = 8  # 8 experts for ~475M params
@@ -336,6 +337,7 @@ class MoEFeedForward(nn.Module):
         super().__init__()
         self.num_experts = config.num_experts
         self.n_embd = config.n_embd
+        self.fp8_pad_for_moe = getattr(config, 'fp8_pad_for_moe', True)
         
         # Router
         self.router = OptimizedTop2Router(
@@ -369,7 +371,25 @@ class MoEFeedForward(nn.Module):
                 continue
                 
             expert_input = x_flat[expert_mask]
+            num_tokens = expert_input.shape[0]
+            
+            # FP8 alignment: ensure batch dimension is divisible by 8
+            # Pad if necessary for FP8 execution
+            padded = False
+            if self.fp8_pad_for_moe and num_tokens % 8 != 0:
+                pad_size = 8 - (num_tokens % 8)
+                expert_input = torch.cat([
+                    expert_input,
+                    torch.zeros(pad_size, expert_input.shape[1], 
+                               device=expert_input.device, dtype=expert_input.dtype)
+                ], dim=0)
+                padded = True
+            
             expert_output = expert(expert_input)
+            
+            # Remove padding if we added any
+            if padded:
+                expert_output = expert_output[:num_tokens]
             
             # Combine with weights - ensure dtype match
             weights = combine_weights[expert_mask, e, :].sum(dim=-1, keepdim=True)
