@@ -377,10 +377,31 @@ class PyramidResidualMoE(nn.Module):
             if not sel.any():
                 continue
             idx = sel.nonzero(as_tuple=False).squeeze(1)
+            if idx.numel() == 0:
+                continue
+            
             w = w_flat[idx, e].unsqueeze(1)
             tokens = x_flat.index_select(0, idx)
-            h = F.silu(expert["gate"](tokens)) * expert["up"](tokens)
+            
+            # Pad tokens for FP8 alignment (need first dim % 8 == 0)
+            n_tokens = tokens.shape[0]
+            remainder = n_tokens % 8
+            if remainder != 0:
+                pad_size = 8 - remainder
+                padding = torch.zeros(pad_size, tokens.shape[1], 
+                                     dtype=tokens.dtype, device=tokens.device)
+                tokens_padded = torch.cat([tokens, padding], dim=0)
+            else:
+                tokens_padded = tokens
+            
+            # Process with padding
+            h = F.silu(expert["gate"](tokens_padded)) * expert["up"](tokens_padded)
             h = expert["down"](h)
+            
+            # Remove padding if added
+            if remainder != 0:
+                h = h[:n_tokens]
+            
             out.index_add_(0, idx, w * h)
 
         return x + base_out + out.view(B, T, C)
