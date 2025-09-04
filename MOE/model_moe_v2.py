@@ -357,44 +357,71 @@ class CausalSelfAttention(nn.Module):
         k = k.view(B, T, self.config.n_kv_head, self.config.head_dim)
         v = v.view(B, T, self.config.n_kv_head, self.config.head_dim)
         
-        if self.use_flash and self.config.n_head == self.config.n_kv_head:
-            # Flash Attention for standard MHA (GQA requires special handling)
-            # Flash expects [B, T, H, D] format
-            output = flash_attn_func(
-                q, k, v,
-                dropout_p=self.config.dropout if self.training else 0.0,
-                causal=True,
-                softmax_scale=1.0 / math.sqrt(self.config.head_dim)
-            )
-            output = output.view(B, T, C)
-        else:
-            # Fallback: Memory-efficient GQA without repeat_interleave
+        if self.use_flash:
+            # Flash Attention v2 supports GQA natively!
+            # Just pass the different sized K,V tensors
+            try:
+                output = flash_attn_func(
+                    q, k, v,
+                    dropout_p=self.config.dropout if self.training else 0.0,
+                    causal=True,
+                    softmax_scale=1.0 / math.sqrt(self.config.head_dim)
+                )
+                output = output.view(B, T, C)
+            except Exception as e:
+                # If Flash Attention fails, fall back to manual implementation
+                self.use_flash = False
+                print(f"Flash Attention failed, using fallback: {e}")
+                # Continue to fallback path below
+        
+        if not self.use_flash:
+            # Fallback: Use PyTorch's native SDPA which handles GQA efficiently
+            # This is much more memory efficient than manual expand+reshape
+            
+            # Transpose to [B, H, T, D] format for SDPA
             q = q.transpose(1, 2)  # [B, H, T, D]
             k = k.transpose(1, 2)  # [B, Hkv, T, D]
             v = v.transpose(1, 2)  # [B, Hkv, T, D]
             
-            # Efficient KV repetition using expand (no memory copy)
-            repeat_factor = self.config.n_head // self.config.n_kv_head
-            k = k[:, :, None, :, :].expand(B, self.config.n_kv_head, repeat_factor, T, self.config.head_dim)
-            k = k.reshape(B, self.config.n_head, T, self.config.head_dim)
-            v = v[:, :, None, :, :].expand(B, self.config.n_kv_head, repeat_factor, T, self.config.head_dim)
-            v = v.reshape(B, self.config.n_head, T, self.config.head_dim)
-            
-            # Standard scaled dot-product attention
-            scale = 1.0 / math.sqrt(self.config.head_dim)
-            scores = torch.matmul(q, k.transpose(-2, -1)) * scale
-            
-            # Causal mask (cache for better performance)
-            if self._causal_mask is None or self._causal_mask.shape[0] < T:
-                self._causal_mask = torch.triu(torch.ones(T, T, device=x.device, dtype=torch.bool), diagonal=1)
-            mask = self._causal_mask[:T, :T]
-            scores = scores.masked_fill(mask, float('-inf'))
-            
-            attn_weights = F.softmax(scores, dim=-1)
-            attn_weights = self.attn_dropout(attn_weights)
-            
-            output = torch.matmul(attn_weights, v)
-            output = output.transpose(1, 2).contiguous().view(B, T, C)
+            # Try to use PyTorch's scaled_dot_product_attention (supports GQA in PyTorch 2.0+)
+            try:
+                # SDPA handles GQA automatically by broadcasting K,V to match Q heads
+                output = F.scaled_dot_product_attention(
+                    q, k, v,
+                    dropout_p=self.config.dropout if self.training else 0.0,
+                    is_causal=True,
+                    scale=1.0 / math.sqrt(self.config.head_dim)
+                )
+                output = output.transpose(1, 2).contiguous().view(B, T, C)
+            except:
+                # Very old PyTorch - manual implementation with memory-efficient expansion
+                repeat_factor = self.config.n_head // self.config.n_kv_head
+                
+                # Process in chunks to avoid memory blow-up
+                output_chunks = []
+                for h_start in range(0, self.config.n_head, self.config.n_kv_head):
+                    h_end = min(h_start + self.config.n_kv_head, self.config.n_head)
+                    q_chunk = q[:, h_start:h_end]
+                    kv_idx = h_start // repeat_factor
+                    k_chunk = k[:, kv_idx:kv_idx+1].expand(-1, h_end-h_start, -1, -1)
+                    v_chunk = v[:, kv_idx:kv_idx+1].expand(-1, h_end-h_start, -1, -1)
+                    
+                    scores = torch.matmul(q_chunk, k_chunk.transpose(-2, -1)) / math.sqrt(self.config.head_dim)
+                    
+                    # Causal mask
+                    if self._causal_mask is None or self._causal_mask.shape[0] < T:
+                        self._causal_mask = torch.triu(torch.ones(T, T, device=x.device, dtype=torch.bool), diagonal=1)
+                    mask = self._causal_mask[:T, :T]
+                    scores = scores.masked_fill(mask, float('-inf'))
+                    
+                    attn_weights = F.softmax(scores, dim=-1)
+                    if self.training and self.config.dropout > 0:
+                        attn_weights = F.dropout(attn_weights, p=self.config.dropout)
+                    
+                    output_chunks.append(torch.matmul(attn_weights, v_chunk))
+                
+                output = torch.cat(output_chunks, dim=1)
+                output = output.transpose(1, 2).contiguous().view(B, T, C)
         
         # Output projection
         output = self.out_proj(output)
