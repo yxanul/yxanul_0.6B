@@ -368,6 +368,10 @@ class CausalSelfAttention(nn.Module):
                     softmax_scale=1.0 / math.sqrt(self.config.head_dim)
                 )
                 output = output.view(B, T, C)
+                # Flash succeeded, return early to avoid fallback
+                output = self.out_proj(output)
+                output = self.resid_dropout(output)
+                return output
             except Exception as e:
                 # If Flash Attention fails, fall back to manual implementation
                 self.use_flash = False
@@ -375,17 +379,17 @@ class CausalSelfAttention(nn.Module):
                 # Continue to fallback path below
         
         if not self.use_flash:
-            # Fallback: Use PyTorch's native SDPA which handles GQA efficiently
-            # This is much more memory efficient than manual expand+reshape
+            # Fallback: Manual attention with memory-efficient GQA
+            # Since SDPA doesn't support GQA in this PyTorch version
             
-            # Transpose to [B, H, T, D] format for SDPA
+            # Transpose to [B, H, T, D] format
             q = q.transpose(1, 2)  # [B, H, T, D]
             k = k.transpose(1, 2)  # [B, Hkv, T, D]
             v = v.transpose(1, 2)  # [B, Hkv, T, D]
             
-            # Try to use PyTorch's scaled_dot_product_attention (supports GQA in PyTorch 2.0+)
-            try:
-                # SDPA handles GQA automatically by broadcasting K,V to match Q heads
+            # Don't use SDPA as it doesn't support GQA in this PyTorch version
+            # Use memory-efficient manual implementation
+            if False:  # Disabled SDPA due to GQA incompatibility
                 output = F.scaled_dot_product_attention(
                     q, k, v,
                     dropout_p=self.config.dropout if self.training else 0.0,
@@ -393,7 +397,7 @@ class CausalSelfAttention(nn.Module):
                     scale=1.0 / math.sqrt(self.config.head_dim)
                 )
                 output = output.transpose(1, 2).contiguous().view(B, T, C)
-            except:
+            else:
                 # Very old PyTorch - manual implementation with memory-efficient expansion
                 repeat_factor = self.config.n_head // self.config.n_kv_head
                 
