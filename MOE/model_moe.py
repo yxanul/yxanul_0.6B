@@ -281,7 +281,8 @@ class PyramidResidualMoE(nn.Module):
         self.base_down = te.Linear(base_h, C, bias=config.bias, params_dtype=torch.bfloat16)
 
         # Router head
-        self.router = te.Linear(C, E, bias=config.bias, params_dtype=torch.bfloat16)
+        # Use regular Linear for router since E=3 doesn't meet FP8 requirements (need % 16)
+        self.router = nn.Linear(C, E, bias=config.bias)
         self.register_buffer("balance_bias", torch.zeros(E), persistent=False)
         self.register_buffer("ema_load", torch.full((E,), 1.0/E), persistent=False)
 
