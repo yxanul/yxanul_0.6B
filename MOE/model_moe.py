@@ -28,6 +28,18 @@ try:
 except Exception as e:
     raise ImportError("TransformerEngine is required (pip install transformer-engine).") from e
 
+# -----------------------------------------------------------------------------
+# Flash Attention for native GQA support
+# -----------------------------------------------------------------------------
+try:
+    from flash_attn import flash_attn_func
+    from flash_attn.modules.mha import FlashCrossAttention, FlashSelfAttention
+    FLASH_AVAILABLE = True
+    print("[INFO] Flash Attention available - using native GQA support")
+except ImportError:
+    FLASH_AVAILABLE = False
+    print("[INFO] Flash Attention not available - using memory-efficient fallback")
+
 
 # -----------------------------------------------------------------------------
 # FP8 recipe helper (you'll use this in your training loop, not inside the model)
@@ -163,6 +175,7 @@ class QKNorm(nn.Module):
 # Attention with GQA, Partial RoPE, and QK-Norm (FP8-friendly via TE Linear)
 # -----------------------------------------------------------------------------
 class OptimizedAttention(nn.Module):
+    """Attention with native GQA support via Flash Attention or efficient fallback"""
     def __init__(self, config: ModelConfig):
         super().__init__()
         self.n_head = config.n_head
@@ -217,22 +230,41 @@ class OptimizedAttention(nn.Module):
         if self.use_qk_norm:
             q, k = self.qk_norm(q, k)
 
-        # Native GQA support in Flash Attention 2 / SDPA
-        # PyTorch 2.0+ SDPA automatically handles different Q/KV head counts efficiently!
-        # No manual expansion needed - Flash Attention 2 has native GQA support
-        # This avoids the 4x memory blow-up from repeat_interleave
-        
-        # Flash/SDP attention with native GQA (Q: [B,28,T,D], KV: [B,7,T,D])
-        y = F.scaled_dot_product_attention(
-            q, k, v,
-            attn_mask=None, 
-            dropout_p=self.dropout_p if self.training else 0.0, 
-            is_causal=True,
-            # Use Flash Attention 2 when available (automatic in PyTorch 2.0+)
-            # This will use the most efficient backend: Flash, Memory-Efficient, or Math
-        )  # [B, H, T, D]
+        # Use Flash Attention if available, otherwise use memory-efficient fallback
+        if FLASH_AVAILABLE:
+            # Flash Attention natively handles GQA without any memory expansion!
+            # Reshape to [B*T, H, D] format required by flash_attn
+            q_flash = q.transpose(1, 2).reshape(B * T, self.n_head, self.head_dim)
+            k_flash = k.transpose(1, 2).reshape(B * T, self.n_kv_heads, self.head_dim)
+            v_flash = v.transpose(1, 2).reshape(B * T, self.n_kv_heads, self.head_dim)
+            
+            # Flash attention with native GQA - no KV expansion needed!
+            y = flash_attn_func(
+                q_flash, k_flash, v_flash,
+                dropout_p=self.dropout_p if self.training else 0.0,
+                causal=True,
+            )
+            y = y.reshape(B, T, self.n_head * self.head_dim)
+            y = y.view(B, T, self.n_embd)
+        else:
+            # Memory-efficient fallback: use expand (creates view, not copy)
+            if self.n_kv_heads != self.n_head:
+                repeat = self.n_head // self.n_kv_heads
+                # expand creates a view without copying memory
+                k = k.unsqueeze(2).expand(B, self.n_kv_heads, repeat, T, self.head_dim)
+                k = k.reshape(B, self.n_head, T, self.head_dim)
+                v = v.unsqueeze(2).expand(B, self.n_kv_heads, repeat, T, self.head_dim)
+                v = v.reshape(B, self.n_head, T, self.head_dim)
+            
+            # Standard SDPA
+            y = F.scaled_dot_product_attention(
+                q, k, v,
+                attn_mask=None, 
+                dropout_p=self.dropout_p if self.training else 0.0, 
+                is_causal=True,
+            )  # [B, H, T, D]
+            y = y.transpose(1, 2).contiguous().view(B, T, self.n_embd)
 
-        y = y.transpose(1, 2).contiguous().view(B, T, C)
         y = self.o_proj(y)
         return self.drop(y)
 
