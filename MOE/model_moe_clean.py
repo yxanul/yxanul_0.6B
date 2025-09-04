@@ -427,6 +427,7 @@ class MoEBlock(nn.Module):
         self.ln_2 = te.RMSNorm(config.n_embd, eps=1e-6)
         
         self.use_moe = use_moe
+        self.num_experts = config.num_experts  # Store for dense layer compatibility
         if use_moe:
             self.ffn = MoEFeedForward(config)
         else:
@@ -444,7 +445,9 @@ class MoEBlock(nn.Module):
         else:
             x = x + self.ffn(self.ln_2(x))
             # Return zeros for expert usage when using dense layer
-            dummy_usage = torch.zeros(8, device=x.device, dtype=x.dtype)  # Assuming 8 experts
+            # Get num_experts from config (passed during init)
+            num_experts = getattr(self, 'num_experts', 8)
+            dummy_usage = torch.zeros(num_experts, device=x.device, dtype=x.dtype)
             return x, torch.tensor(0.0, device=x.device), torch.tensor(0.0, device=x.device), dummy_usage
 
 
