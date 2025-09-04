@@ -253,6 +253,11 @@ class OptimizedAttention(nn.Module):
             k_flash = k.transpose(1, 2).contiguous()  # [B, T, Hkv, D]
             v_flash = v.transpose(1, 2).contiguous()  # [B, T, Hkv, D]
             
+            # Debug: Verify we're using Flash Attention
+            if not hasattr(self, '_flash_logged'):
+                print(f"[DEBUG] Using Flash Attention for GQA: Q={q_flash.shape}, KV={k_flash.shape}")
+                self._flash_logged = True
+            
             # Flash attention with native GQA - no KV expansion needed!
             y = flash_attn_func(
                 q_flash, k_flash, v_flash,
@@ -429,26 +434,29 @@ class PyramidResidualMoE(nn.Module):
             weights = torch.zeros_like(gate).scatter_(-1, topi, topv)
             active = (weights > 0).to(weights.dtype)
 
-        # BATCHED expert compute - process all tokens for each expert at once
-        expert_out = torch.zeros_like(x)
+        # OPTIMIZED batched expert compute with efficient indexing
+        # Flatten for more efficient indexing
+        x_flat = x.view(B * T, C)
+        expert_out = torch.zeros(B * T, C, dtype=x.dtype, device=x.device)
+        
+        # Precompute all indices for faster access
+        active_flat = active.view(B * T, -1)
+        weights_flat = weights.view(B * T, -1)
         
         for e, expert in enumerate(self.experts):
-            # Get mask for this expert (2D: [B, T])
-            expert_mask = active[:, :, e] > 0
+            # Get indices where this expert is active (much faster than mask)
+            expert_indices = (active_flat[:, e] > 0).nonzero(as_tuple=True)[0]
             
-            if not expert_mask.any():
+            if expert_indices.numel() == 0:
                 continue
             
-            # Extract ALL tokens for this expert at once (batched)
-            expert_tokens = x[expert_mask]  # Shape: [num_selected_tokens, C]
-            expert_weights = weights[:, :, e][expert_mask].unsqueeze(-1)  # [num_selected_tokens, 1]
+            # Efficient gather using indices
+            expert_tokens = x_flat.index_select(0, expert_indices)
+            expert_weights = weights_flat[expert_indices, e].unsqueeze(-1)
             
-            # Check if we have tokens to process
             n_tokens = expert_tokens.shape[0]
-            if n_tokens == 0:
-                continue
             
-            # Pad for FP8/cuBLAS alignment if needed
+            # Pad for alignment if needed (keep this for cuBLAS compatibility)
             alignment = 16
             remainder = n_tokens % alignment
             if remainder != 0:
@@ -458,8 +466,7 @@ class PyramidResidualMoE(nn.Module):
             else:
                 expert_tokens_padded = expert_tokens
             
-            # Single batched forward pass for this expert (all tokens at once!)
-            # This is the KEY optimization - one big GEMM instead of many small ones
+            # Batched expert forward pass
             gate_out = expert["gate"](expert_tokens_padded)
             up_out = expert["up"](expert_tokens_padded)
             h = F.silu(gate_out) * up_out
@@ -469,12 +476,11 @@ class PyramidResidualMoE(nn.Module):
             if remainder != 0:
                 h = h[:n_tokens]
             
-            # Apply weights and add to output
-            weighted_h = expert_weights * h
-            
-            # Scatter back to original positions
-            expert_out[expert_mask] = weighted_h
+            # Efficient scatter using index_add_ (much faster than masked assignment)
+            expert_out.index_add_(0, expert_indices, expert_weights * h)
         
+        # Reshape and combine
+        expert_out = expert_out.view(B, T, C)
         return x + base_out + expert_out
 
 
