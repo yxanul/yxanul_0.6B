@@ -347,11 +347,12 @@ class PyramidResidualMoE(nn.Module):
         self.experts = nn.ModuleList()
         for r in ratios:
             h = int(round(C * float(r) / 64) * 64)
-            # Use te.Linear for experts - we now pad properly so FP8 will work
+            # Use nn.Linear for experts - FP8 overhead too high for variable batch sizes
+            # Even with batching, each expert gets different number of tokens
             self.experts.append(nn.ModuleDict(dict(
-                gate = te.Linear(C, h, bias=config.bias, params_dtype=torch.bfloat16),
-                up   = te.Linear(C, h, bias=config.bias, params_dtype=torch.bfloat16),
-                down = te.Linear(h, C, bias=config.bias, params_dtype=torch.bfloat16),
+                gate = nn.Linear(C, h, bias=config.bias),
+                up   = nn.Linear(C, h, bias=config.bias),
+                down = nn.Linear(h, C, bias=config.bias),
             )))
 
     # ----- helpers -----
@@ -428,48 +429,53 @@ class PyramidResidualMoE(nn.Module):
             weights = torch.zeros_like(gate).scatter_(-1, topi, topv)
             active = (weights > 0).to(weights.dtype)
 
-        # sparse expert compute
-        x_flat = x.view(B*T, C)
-        out = torch.zeros_like(x_flat)
-        w_flat = weights.view(B*T, -1)
-        a_flat = active.view(B*T, -1)
-
+        # BATCHED expert compute - process all tokens for each expert at once
+        expert_out = torch.zeros_like(x)
+        
         for e, expert in enumerate(self.experts):
-            sel = a_flat[:, e] > 0
-            if not sel.any():
-                continue
-            idx = sel.nonzero(as_tuple=False).squeeze(1)
-            if idx.numel() == 0:
+            # Get mask for this expert (2D: [B, T])
+            expert_mask = active[:, :, e] > 0
+            
+            if not expert_mask.any():
                 continue
             
-            w = w_flat[idx, e].unsqueeze(1)
-            tokens = x_flat.index_select(0, idx)
+            # Extract ALL tokens for this expert at once (batched)
+            expert_tokens = x[expert_mask]  # Shape: [num_selected_tokens, C]
+            expert_weights = weights[:, :, e][expert_mask].unsqueeze(-1)  # [num_selected_tokens, 1]
             
-            # Pad tokens for FP8/cuBLAS alignment
-            # Need first dim % 8 == 0 for FP8, but also % 16 for some cuBLAS kernels
-            n_tokens = tokens.shape[0]
-            # Align to 16 for maximum compatibility
+            # Check if we have tokens to process
+            n_tokens = expert_tokens.shape[0]
+            if n_tokens == 0:
+                continue
+            
+            # Pad for FP8/cuBLAS alignment if needed
             alignment = 16
             remainder = n_tokens % alignment
             if remainder != 0:
                 pad_size = alignment - remainder
-                padding = torch.zeros(pad_size, tokens.shape[1], 
-                                     dtype=tokens.dtype, device=tokens.device)
-                tokens_padded = torch.cat([tokens, padding], dim=0)
+                padding = torch.zeros(pad_size, C, dtype=expert_tokens.dtype, device=expert_tokens.device)
+                expert_tokens_padded = torch.cat([expert_tokens, padding], dim=0)
             else:
-                tokens_padded = tokens
+                expert_tokens_padded = expert_tokens
             
-            # Process with padding
-            h = F.silu(expert["gate"](tokens_padded)) * expert["up"](tokens_padded)
+            # Single batched forward pass for this expert (all tokens at once!)
+            # This is the KEY optimization - one big GEMM instead of many small ones
+            gate_out = expert["gate"](expert_tokens_padded)
+            up_out = expert["up"](expert_tokens_padded)
+            h = F.silu(gate_out) * up_out
             h = expert["down"](h)
             
-            # Remove padding if added
+            # Remove padding
             if remainder != 0:
                 h = h[:n_tokens]
             
-            out.index_add_(0, idx, w * h)
-
-        return x + base_out + out.view(B, T, C)
+            # Apply weights and add to output
+            weighted_h = expert_weights * h
+            
+            # Scatter back to original positions
+            expert_out[expert_mask] = weighted_h
+        
+        return x + base_out + expert_out
 
 
 # -----------------------------------------------------------------------------
