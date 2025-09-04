@@ -47,7 +47,7 @@ class MoETrainingConfig:
     n_embd: int = 768
     vocab_size: int = 32000  # 32k BPE tokenizer
     n_kv_heads: int = 3
-    block_size: int = 2048  # Can increase to 4096 for better GPU util
+    block_size: int = 4096  # DOUBLED for better MoE efficiency
     dropout: float = 0.05
     
     # MoE config
@@ -67,7 +67,7 @@ class MoETrainingConfig:
     
     # Training config
     batch_size: int = 8
-    gradient_accumulation_steps: int = 16  # Match dense model for FP8 compatibility
+    gradient_accumulation_steps: int = 4  # Reduced with longer sequences
     max_iters: int = 2000
     eval_interval: int = 100
     eval_iters: int = 50

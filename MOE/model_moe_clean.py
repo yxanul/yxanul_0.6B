@@ -42,7 +42,7 @@ class MoEConfig:
     n_head: int = 12
     n_embd: int = 768
     n_kv_heads: int = 3  # GQA: 4x compression
-    block_size: int = 2048  # Context length
+    block_size: int = 4096  # DOUBLED for better GPU utilization
     dropout: float = 0.05
     bias: bool = False
     rope_theta: float = 10000.0
