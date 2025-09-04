@@ -88,7 +88,7 @@ class ModelConfig:
     router_type: str = "sigmoid"         # {"sigmoid","softmax_topk"}
     router_tau: float = 1.0
     router_threshold: float = 0.0        # IGNORED when max_active_experts=1
-    router_stochastic: bool = False      # DISABLED - using deterministic top-1
+    router_stochastic: bool = True       # RE-ENABLED with top-1 sampling for diversity
     router_max_active_experts: int = 1   # ENFORCES exactly 1 expert per token
     balance_loss_free: bool = True       # aux-free uniformization via bias
     balance_ema_beta: float = 0.9
@@ -326,11 +326,15 @@ class PyramidResidualMoE(nn.Module):
         logits = (self.router(x) + self.balance_bias.view(1,1,-1)) / max(self.cfg.router_tau, 1e-6)
         probs = torch.sigmoid(logits)
 
-        # DETERMINISTIC TOP-1 when max_active_experts == 1
+        # TOP-1 routing when max_active_experts == 1
         if self.cfg.router_max_active_experts == 1:
-            # Always select exactly top-1 expert per token for constant compute
-            top1_idx = probs.argmax(dim=-1)  # [B,T]
-            active = F.one_hot(top1_idx, num_classes=self.cfg.moe_num_experts).to(probs.dtype)
+            if self.training and self.cfg.router_stochastic:
+                # Stochastic: sample from probability distribution (exploration)
+                expert_idx = torch.multinomial(probs.view(-1, self.cfg.moe_num_experts), 1).view(probs.shape[:-1])
+            else:
+                # Deterministic: always pick top-1 (inference or non-stochastic)
+                expert_idx = probs.argmax(dim=-1)  # [B,T]
+            active = F.one_hot(expert_idx, num_classes=self.cfg.moe_num_experts).to(probs.dtype)
         else:
             # Original logic for k > 1
             if self.cfg.router_stochastic and self.training:

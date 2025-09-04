@@ -47,8 +47,8 @@ class TrainingConfig:
     # Data & batching
     data_dir: str = "data_mixed_3b"     # folder with train.bin / val.bin (uint16)
     block_size: int = 2048              # Stage 1 pretraining: shorter sequences
-    batch_size: int = 8
-    grad_accum_steps: int = 16
+    batch_size: int = 12                # Increased from 8 (you have memory)
+    grad_accum_steps: int = 8           # Reduced from 16 (less overhead)
 
     # Optim & schedule
     learning_rate: float = 6e-4
