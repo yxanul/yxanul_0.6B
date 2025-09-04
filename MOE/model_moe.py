@@ -298,10 +298,11 @@ class PyramidResidualMoE(nn.Module):
         self.experts = nn.ModuleList()
         for r in ratios:
             h = int(round(C * float(r) / 64) * 64)
+            # Use regular nn.Linear for experts to avoid cuBLAS issues with variable batch sizes
             self.experts.append(nn.ModuleDict(dict(
-                gate = te.Linear(C, h, bias=config.bias, params_dtype=torch.bfloat16),
-                up   = te.Linear(C, h, bias=config.bias, params_dtype=torch.bfloat16),
-                down = te.Linear(h, C, bias=config.bias, params_dtype=torch.bfloat16),
+                gate = nn.Linear(C, h, bias=config.bias),
+                up   = nn.Linear(C, h, bias=config.bias),
+                down = nn.Linear(h, C, bias=config.bias),
             )))
 
     # ----- helpers -----
@@ -383,11 +384,14 @@ class PyramidResidualMoE(nn.Module):
             w = w_flat[idx, e].unsqueeze(1)
             tokens = x_flat.index_select(0, idx)
             
-            # Pad tokens for FP8 alignment (need first dim % 8 == 0)
+            # Pad tokens for FP8/cuBLAS alignment
+            # Need first dim % 8 == 0 for FP8, but also % 16 for some cuBLAS kernels
             n_tokens = tokens.shape[0]
-            remainder = n_tokens % 8
+            # Align to 16 for maximum compatibility
+            alignment = 16
+            remainder = n_tokens % alignment
             if remainder != 0:
-                pad_size = 8 - remainder
+                pad_size = alignment - remainder
                 padding = torch.zeros(pad_size, tokens.shape[1], 
                                      dtype=tokens.dtype, device=tokens.device)
                 tokens_padded = torch.cat([tokens, padding], dim=0)

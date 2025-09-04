@@ -78,6 +78,7 @@ class TrainingConfig:
     fp8_amax_history_len: int = 16
     fp8_warmup_steps: int = 0  # Enable FP8 immediately for testing
     fp8_amax_compute_algo: str = "max"
+    fuse_wgrad_accumulation: bool = False  # DISABLED - adds overhead like in dense model
 
     # Wandb
     wandb_project: str = "glm-mini-prmoe"
