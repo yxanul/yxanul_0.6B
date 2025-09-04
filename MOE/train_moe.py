@@ -63,11 +63,11 @@ class MoETrainingConfig:
     # FP8 config
     use_fp8: bool = True
     fp8_amax_history_len: int = 16
-    fp8_warmup_steps: int = 100
+    fp8_warmup_steps: int = 0  # Start FP8 immediately for testing
     
     # Training config
     batch_size: int = 8
-    gradient_accumulation_steps: int = 16
+    gradient_accumulation_steps: int = 16  # Match dense model for FP8 compatibility
     max_iters: int = 2000
     eval_interval: int = 100
     eval_iters: int = 50
@@ -147,8 +147,7 @@ def evaluate_with_experts(model, data_loader, config, fp8_recipe):
     """Evaluate model with expert utilization tracking."""
     model.eval()
     losses = []
-    expert_counts = torch.zeros(config.num_experts, device=config.device)
-    total_tokens = 0
+    all_expert_usage = []
     
     for _ in range(config.eval_iters):
         x, y = data_loader.get_batch('val', config.batch_size)
@@ -161,10 +160,19 @@ def evaluate_with_experts(model, data_loader, config, fp8_recipe):
             logits, loss = model(x, y)
         
         losses.append(loss.item())
-        total_tokens += x.numel()
+        
+        # Collect expert usage if available
+        if hasattr(model, 'last_expert_usage'):
+            all_expert_usage.append(model.last_expert_usage.detach())
+    
+    # Calculate average expert usage
+    if all_expert_usage:
+        avg_expert_usage = torch.stack(all_expert_usage).mean(dim=0)
+    else:
+        avg_expert_usage = torch.zeros(config.num_experts, device=config.device)
     
     model.train()
-    return np.mean(losses), expert_counts / max(total_tokens, 1)
+    return np.mean(losses), avg_expert_usage
 
 
 def save_checkpoint(model, optimizer, config, iter_num, val_loss, checkpoint_path):
@@ -188,6 +196,7 @@ def train():
     """Main MoE training loop."""
     parser = argparse.ArgumentParser()
     parser.add_argument('--batch_size', type=int, help='Batch size')
+    parser.add_argument('--grad_accum', type=int, help='Gradient accumulation steps')
     parser.add_argument('--data_dir', type=str, default='data_mixed_3b', help='Data directory')
     parser.add_argument('--max_iters', type=int, default=2000, help='Max iterations')
     parser.add_argument('--eval_interval', type=int, default=100, help='Eval interval')
@@ -206,6 +215,8 @@ def train():
     config = MoETrainingConfig()
     if args.batch_size:
         config.batch_size = args.batch_size
+    if args.grad_accum:
+        config.gradient_accumulation_steps = args.grad_accum
     if args.no_fp8:
         config.use_fp8 = False
     
@@ -318,8 +329,7 @@ def train():
         
         # Accumulate gradients
         total_loss = 0
-        total_aux_loss = 0
-        total_z_loss = 0
+        batch_expert_usage = []
         
         for micro_step in range(config.gradient_accumulation_steps):
             x, y = data_loader.get_batch('train', config.batch_size)
@@ -334,13 +344,17 @@ def train():
             else:
                 logits, loss = model(x, y)
             
+            # Track expert usage
+            if hasattr(model, 'last_expert_usage'):
+                batch_expert_usage.append(model.last_expert_usage.detach())
+            
             # Extract component losses from combined loss
-            # Note: aux and z losses are already included in loss
             base_loss = loss.item()
             total_loss += base_loss
             
-            loss = loss / config.gradient_accumulation_steps
-            loss.backward()
+            # Scale loss for gradient accumulation
+            scaled_loss = loss / config.gradient_accumulation_steps
+            scaled_loss.backward()
         
         # Gradient clipping
         if config.grad_clip > 0:
@@ -370,6 +384,14 @@ def train():
             except:
                 perplexity = float('inf')
             
+            # Calculate expert statistics
+            if batch_expert_usage:
+                avg_usage = torch.stack(batch_expert_usage).mean(dim=0)
+                expert_cv = avg_usage.std() / (avg_usage.mean() + 1e-8)
+            else:
+                avg_usage = torch.zeros(config.num_experts, device=config.device)
+                expert_cv = torch.tensor(0.0)
+            
             # Log comprehensive metrics
             metrics = {
                 'train/loss': avg_loss,
@@ -380,7 +402,13 @@ def train():
                 'train/fp8_active': use_fp8_now,
                 'train/gpu_memory_gb': torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0,
                 'train/iteration': iter_num,
+                'moe/train_expert_cv': expert_cv.item() if torch.is_tensor(expert_cv) else expert_cv,
             }
+            
+            # Log individual expert usage during training
+            if config.num_experts <= 16:
+                for i in range(config.num_experts):
+                    metrics[f'moe/train_expert_{i}_usage'] = avg_usage[i].item() if torch.is_tensor(avg_usage[i]) else avg_usage[i]
             
             logger.log_metrics(metrics, step=iter_num)
             
@@ -399,19 +427,23 @@ def train():
                 val_perplexity = float('inf')
             
             # Calculate expert load balance (coefficient of variation)
-            expert_cv = expert_usage.std() / (expert_usage.mean() + 1e-8)
+            if expert_usage.sum() > 0:
+                expert_cv = expert_usage.std() / (expert_usage.mean() + 1e-8)
+            else:
+                expert_cv = torch.tensor(0.0)
             
             # Log validation metrics
             val_metrics = {
                 'val/loss': val_loss,
                 'val/perplexity': val_perplexity,
-                'moe/expert_load_cv': expert_cv.item() if torch.is_tensor(expert_cv) else expert_cv,
+                'moe/val_expert_cv': expert_cv.item() if torch.is_tensor(expert_cv) else expert_cv,
+                'moe/val_expert_mean_usage': expert_usage.mean().item() if torch.is_tensor(expert_usage) else expert_usage.mean(),
             }
             
             # Log per-expert usage if small number of experts
             if config.num_experts <= 16:
                 for i in range(config.num_experts):
-                    val_metrics[f'moe/expert_{i}_usage'] = expert_usage[i].item() if torch.is_tensor(expert_usage[i]) else expert_usage[i]
+                    val_metrics[f'moe/val_expert_{i}_usage'] = expert_usage[i].item() if torch.is_tensor(expert_usage[i]) else expert_usage[i]
             
             logger.log_metrics(val_metrics, step=iter_num)
             

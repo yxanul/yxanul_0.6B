@@ -361,6 +361,9 @@ class MoEFeedForward(nn.Module):
         # Route tokens
         dispatch_mask, combine_weights, aux_loss, z_loss = self.router(x)
         
+        # Track expert usage for monitoring
+        expert_usage = torch.zeros(self.num_experts, device=x.device, dtype=x.dtype)
+        
         # Process through experts
         output = torch.zeros_like(x_flat)
         
@@ -373,17 +376,29 @@ class MoEFeedForward(nn.Module):
             expert_input = x_flat[expert_mask]
             num_tokens = expert_input.shape[0]
             
+            # Skip if too few tokens (can cause FP8 issues)
+            if num_tokens < 8 and self.fp8_pad_for_moe:
+                # For very small batches, might be better to skip
+                # But we still need to pad for correctness
+                pass
+            
+            # Track usage for this expert
+            expert_usage[e] = num_tokens / (B * T)
+            
             # FP8 alignment: ensure batch dimension is divisible by 8
             # Pad if necessary for FP8 execution
             padded = False
-            if self.fp8_pad_for_moe and num_tokens % 8 != 0:
-                pad_size = 8 - (num_tokens % 8)
-                expert_input = torch.cat([
-                    expert_input,
-                    torch.zeros(pad_size, expert_input.shape[1], 
-                               device=expert_input.device, dtype=expert_input.dtype)
-                ], dim=0)
-                padded = True
+            if self.fp8_pad_for_moe and num_tokens > 0:
+                # Always pad to multiple of 8 for FP8
+                padded_size = ((num_tokens + 7) // 8) * 8
+                if padded_size != num_tokens:
+                    pad_size = padded_size - num_tokens
+                    expert_input = torch.cat([
+                        expert_input,
+                        torch.zeros(pad_size, expert_input.shape[1], 
+                                   device=expert_input.device, dtype=expert_input.dtype)
+                    ], dim=0)
+                    padded = True
             
             expert_output = expert(expert_input)
             
@@ -398,7 +413,7 @@ class MoEFeedForward(nn.Module):
         output = output.view(B, T, C)
         output = self.dropout(output)
         
-        return output, aux_loss, z_loss
+        return output, aux_loss, z_loss, expert_usage
 
 
 class MoEBlock(nn.Module):
@@ -422,12 +437,14 @@ class MoEBlock(nn.Module):
         
         # FFN
         if self.use_moe:
-            ffn_out, aux_loss, z_loss = self.ffn(self.ln_2(x))
+            ffn_out, aux_loss, z_loss, expert_usage = self.ffn(self.ln_2(x))
             x = x + ffn_out
-            return x, aux_loss, z_loss
+            return x, aux_loss, z_loss, expert_usage
         else:
             x = x + self.ffn(self.ln_2(x))
-            return x, torch.tensor(0.0, device=x.device), torch.tensor(0.0, device=x.device)
+            # Return zeros for expert usage when using dense layer
+            dummy_usage = torch.zeros(8, device=x.device, dtype=x.dtype)  # Assuming 8 experts
+            return x, torch.tensor(0.0, device=x.device), torch.tensor(0.0, device=x.device), dummy_usage
 
 
 class CleanMoE_TE(nn.Module):
@@ -524,15 +541,23 @@ class CleanMoE_TE(nn.Module):
         tok_emb = self.transformer.wte(idx)
         x = self.transformer.drop(tok_emb)
         
-        # Accumulate auxiliary losses
+        # Accumulate auxiliary losses and expert usage
         total_aux_loss = 0.0
         total_z_loss = 0.0
+        all_expert_usage = []
         
         # Forward through transformer blocks
         for block in self.transformer.h:
-            x, aux_loss, z_loss = block(x, self.rope_cache)
+            x, aux_loss, z_loss, expert_usage = block(x, self.rope_cache)
             total_aux_loss = total_aux_loss + aux_loss
             total_z_loss = total_z_loss + z_loss
+            all_expert_usage.append(expert_usage)
+        
+        # Average expert usage across layers
+        if all_expert_usage:
+            avg_expert_usage = torch.stack(all_expert_usage).mean(dim=0)
+        else:
+            avg_expert_usage = torch.zeros(self.config.num_experts, device=device)
         
         # Final norm and output
         x = self.transformer.ln_f(x)
@@ -552,6 +577,9 @@ class CleanMoE_TE(nn.Module):
                 loss = loss + self.config.router_aux_loss_coef * total_aux_loss
             if self.config.router_z_loss_coef > 0:
                 loss = loss + self.config.router_z_loss_coef * total_z_loss
+        
+        # Store expert usage for monitoring
+        self.last_expert_usage = avg_expert_usage
         
         return logits, loss
     
