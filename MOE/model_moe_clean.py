@@ -54,8 +54,8 @@ class MoEConfig:
     fp8_pad_for_moe: bool = True  # Pad expert inputs for FP8 alignment
     
     # MoE configuration
-    num_experts: int = 8  # 8 experts for ~475M params
-    top_k: int = 2  # Top-2 routing for stability
+    num_experts: int = 4  # 4 experts for better GPU utilization
+    top_k: int = 2  # Top-2 routing (50% active with 4 experts)
     capacity_factor: float = 1.25  # Conservative capacity
     router_aux_loss_coef: float = 0.01  # Load balancing
     router_z_loss_coef: float = 0.001  # Small z-loss for stability

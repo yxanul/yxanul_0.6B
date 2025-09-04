@@ -47,13 +47,13 @@ class MoETrainingConfig:
     n_embd: int = 768
     vocab_size: int = 32000  # 32k BPE tokenizer
     n_kv_heads: int = 3
-    block_size: int = 2048
+    block_size: int = 2048  # Can increase to 4096 for better GPU util
     dropout: float = 0.05
     
     # MoE config
-    num_experts: int = 8
-    top_k: int = 2
-    capacity_factor: float = 1.25
+    num_experts: int = 4  # Fewer experts = better utilization
+    top_k: int = 2  # 50% active instead of 25%
+    capacity_factor: float = 1.5  # Allow more tokens per expert
     router_aux_loss_coef: float = 0.01
     router_z_loss_coef: float = 0.001
     router_jitter_noise: float = 0.01
