@@ -270,26 +270,62 @@ def main():
 
         optimizer.zero_grad(set_to_none=True)
         total_loss = 0.0
+        
+        # Initialize timing accumulators
+        t_data_total = 0.0
+        t_forward_total = 0.0
+        t_backward_total = 0.0
 
         for micro in range(tcfg.grad_accum_steps):
+            # Data loading timing
+            torch.cuda.synchronize() if tcfg.device == 'cuda' else None
+            t_data_start = time.time()
+            
             x, y = loader.get_batch("train", tcfg.batch_size)
+            
+            torch.cuda.synchronize() if tcfg.device == 'cuda' else None
+            t_data_end = time.time()
+            t_data_total += t_data_end - t_data_start
 
+            # Forward pass timing
+            torch.cuda.synchronize() if tcfg.device == 'cuda' else None
+            t_forward_start = time.time()
+            
             use_fp8_now = tcfg.use_fp8 and (iter_num >= tcfg.fp8_warmup_steps)
             if use_fp8_now:
                 with te.fp8_autocast(enabled=True, fp8_recipe=fp8_recipe):
                     _, loss = model(x, y)
             else:
                 _, loss = model(x, y)
+            
+            torch.cuda.synchronize() if tcfg.device == 'cuda' else None
+            t_forward_end = time.time()
+            t_forward_total += t_forward_end - t_forward_start
 
+            # Backward pass timing
+            torch.cuda.synchronize() if tcfg.device == 'cuda' else None
+            t_backward_start = time.time()
+            
             total_loss += loss.item()
             (loss / tcfg.grad_accum_steps).backward()
+            
+            torch.cuda.synchronize() if tcfg.device == 'cuda' else None
+            t_backward_end = time.time()
+            t_backward_total += t_backward_end - t_backward_start
 
+        # Optimizer step timing
+        torch.cuda.synchronize() if tcfg.device == 'cuda' else None
+        t_opt_start = time.time()
+        
         # clip
         grad_norm = 0.0
         if tcfg.grad_clip > 0:
             grad_norm = float(torch.nn.utils.clip_grad_norm_(model.parameters(), tcfg.grad_clip))
 
         optimizer.step()
+        
+        torch.cuda.synchronize() if tcfg.device == 'cuda' else None
+        t_opt_end = time.time()
 
         tokens_processed += tcfg.batch_size * tcfg.block_size * tcfg.grad_accum_steps
 
@@ -311,7 +347,10 @@ def main():
                 msg += f" | k̄ {moe_stats['moe/k_mean']:.2f}"
             if "moe/load_std_mean" in moe_stats:
                 msg += f" | loadσ {moe_stats['moe/load_std_mean']:.3f}"
+            # Add timing breakdown on second line for clarity
+            timing_msg = f"  ↳ Time(ms): data={t_data_total*1000:.0f} fwd={t_forward_total*1000:.0f} bwd={t_backward_total*1000:.0f} opt={(t_opt_end-t_opt_start)*1000:.0f}"
             print(msg)
+            print(timing_msg)
 
             log_payload = {
                 "train/loss": avg_loss,
@@ -322,6 +361,13 @@ def main():
                 "train/fp8_active": use_fp8_now,
                 "sys/gpu_mem_gb": torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0,
                 "iter": iter_num,
+                # Timing breakdown (in milliseconds for readability)
+                "time/data_ms": t_data_total * 1000,
+                "time/forward_ms": t_forward_total * 1000,
+                "time/backward_ms": t_backward_total * 1000,
+                "time/optimizer_ms": (t_opt_end - t_opt_start) * 1000,
+                "time/total_ms": (t_data_total + t_forward_total + t_backward_total + (t_opt_end - t_opt_start)) * 1000,
+                "time/per_microbatch_ms": ((t_data_total + t_forward_total + t_backward_total) / tcfg.grad_accum_steps) * 1000,
             }
             log_payload.update(moe_stats)
             logger.log_metrics(log_payload, step=iter_num)
