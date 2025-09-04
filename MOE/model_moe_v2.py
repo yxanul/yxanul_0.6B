@@ -169,9 +169,9 @@ class SwitchRouter(nn.Module):
     
     def get_stats(self) -> Dict:
         """Get routing statistics."""
-        if self.total_tokens > 0:
+        if self.total_tokens.item() > 0:
             loads = self.expert_counts / self.total_tokens
-            drop_rate = float(self.dropped_tokens) / float(self.total_tokens)
+            drop_rate = float(self.dropped_tokens.item()) / float(self.total_tokens.item())
             cv = loads.std() / (loads.mean() + 1e-6)
             
             return {
