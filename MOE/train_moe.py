@@ -297,7 +297,10 @@ def main():
             dt = max(1e-6, (time.time() - t0))
             tps = tokens_processed / dt
             avg_loss = total_loss / tcfg.grad_accum_steps
-            ppl = math.exp(min(20.0, avg_loss))
+            # For MTP, normalize by total weight (2.75) to get correct perplexity
+            mtp_weight = 2.75 if mcfg.use_mtp else 1.0
+            normalized_loss = avg_loss / mtp_weight
+            ppl = math.exp(min(20.0, normalized_loss))
 
             # collect MoE stats
             moe_stats = collect_moe_stats(model)
@@ -328,7 +331,9 @@ def main():
         # Eval
         if iter_num % tcfg.eval_interval == 0:
             val_loss = evaluate(model, loader, tcfg, fp8_recipe)
-            val_ppl = math.exp(min(20.0, val_loss))
+            # Normalize MTP loss for correct perplexity
+            mtp_weight = 2.75 if mcfg.use_mtp else 1.0
+            val_ppl = math.exp(min(20.0, val_loss / mtp_weight))
             print(f"[eval] it {iter_num}: val {val_loss:.4f} | ppl {val_ppl:.2f}")
             logger.log_metrics({"val/loss": val_loss, "val/ppl": val_ppl}, step=iter_num)
 
@@ -345,7 +350,8 @@ def main():
 
     # Final eval
     final_val = evaluate(model, loader, tcfg, fp8_recipe)
-    final_ppl = math.exp(min(20.0, final_val))
+    mtp_weight = 2.75 if mcfg.use_mtp else 1.0
+    final_ppl = math.exp(min(20.0, final_val / mtp_weight))
     logger.set_summary(final_val=final_val, final_ppl=final_ppl, total_iters=tcfg.max_iters, params=model.num_parameters())
     print("""
 ==============================
