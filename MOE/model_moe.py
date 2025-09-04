@@ -233,18 +233,17 @@ class OptimizedAttention(nn.Module):
         # Use Flash Attention if available, otherwise use memory-efficient fallback
         if FLASH_AVAILABLE:
             # Flash Attention natively handles GQA without any memory expansion!
-            # Reshape to [B*T, H, D] format required by flash_attn
-            q_flash = q.transpose(1, 2).reshape(B * T, self.n_head, self.head_dim)
-            k_flash = k.transpose(1, 2).reshape(B * T, self.n_kv_heads, self.head_dim)
-            v_flash = v.transpose(1, 2).reshape(B * T, self.n_kv_heads, self.head_dim)
+            # Keep in [B, T, H, D] format - Flash Attention expects 4D tensors
+            q_flash = q.transpose(1, 2).contiguous()  # [B, T, H, D]
+            k_flash = k.transpose(1, 2).contiguous()  # [B, T, Hkv, D]
+            v_flash = v.transpose(1, 2).contiguous()  # [B, T, Hkv, D]
             
             # Flash attention with native GQA - no KV expansion needed!
             y = flash_attn_func(
                 q_flash, k_flash, v_flash,
                 dropout_p=self.dropout_p if self.training else 0.0,
                 causal=True,
-            )
-            y = y.reshape(B, T, self.n_head * self.head_dim)
+            )  # Returns [B, T, H, D]
             y = y.view(B, T, self.n_embd)
         else:
             # Memory-efficient fallback: use expand (creates view, not copy)
