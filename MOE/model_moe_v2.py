@@ -130,9 +130,11 @@ class SwitchRouter(nn.Module):
                 # Set dispatch mask
                 dispatch_mask[b_idx, t_idx, e] = 1.0
         
-        # Compute gates - for Switch with top-1, these become 1.0 for dispatched tokens
-        # We can simplify since each token goes to exactly 1 expert or none
-        gates = dispatch_mask  # Already 0/1, no need to normalize for Switch
+        # Compute gates with gradients for task loss
+        # Use actual routing probabilities for dispatched tokens to maintain gradient flow
+        gates = router_probs * dispatch_mask  # Soft weights for gradient flow
+        # Normalize so each token's gates sum to 1 (or 0 for dropped tokens)
+        gates = gates / (gates.sum(dim=-1, keepdim=True) + 1e-6)
         
         # Update tracking with proper device handling
         if self.training:
@@ -292,9 +294,9 @@ class MoELayer(nn.Module):
             else:
                 expert_output = expert(expert_input)
             
-            # For Switch routing with top-1, gates are 1.0 for dispatched tokens
-            # Skip the multiplication for efficiency
-            output_flat.index_add_(0, indices, expert_output)
+            # Apply gate weights for gradient flow through router
+            gate_values = gates.view(-1, self.config.num_experts)[indices, e].unsqueeze(-1)
+            output_flat.index_add_(0, indices, gate_values * expert_output)
         
         # Reshape output
         output = output_flat.view(B, T, C)
