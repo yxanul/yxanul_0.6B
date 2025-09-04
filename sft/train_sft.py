@@ -44,18 +44,18 @@ class SFTConfig:
     fp8_amax_history_len: int = 16
     fp8_warmup_steps: int = 50  # Shorter warmup for SFT
     
-    # SFT Training config (aggressive approach)
-    batch_size: int = 16  # Slightly smaller due to longer sequences
-    gradient_accumulation_steps: int = 16
-    max_iters: int = 3000  # More iterations for good SFT
-    eval_interval: int = 100
+    # SFT Training config (full epoch approach with frequent updates)
+    batch_size: int = 8  # Small batch for frequent updates
+    gradient_accumulation_steps: int = 1  # No accumulation - update every batch
+    max_iters: int = 800  # ~1 full epoch (772 actual)
+    eval_interval: int = 50  # Eval every ~6% of epoch
     eval_iters: int = 20
-    learning_rate: float = 3e-4  # Aggressive SFT learning rate
-    min_lr: float = 5e-5
-    warmup_iters: int = 5  # Very quick warmup for short SFT
-    lr_decay_iters: int = 3000
+    learning_rate: float = 7e-5  # Balanced SFT learning rate (sweet spot)
+    min_lr: float = 5e-5  # Lower min LR to match reduced starting LR
+    warmup_iters: int = 20  # Slightly longer warmup for 800 iterations
+    lr_decay_iters: int = 800  # Decay over the full epoch
     grad_clip: float = 1.0
-    weight_decay: float = 0.1
+    weight_decay: float = 0.05  # Reduced weight decay for SFT
     beta1: float = 0.9
     beta2: float = 0.999
     
@@ -183,6 +183,49 @@ def evaluate(model, data_loader, config, fp8_recipe):
     return np.mean(losses)
 
 
+def create_optimizer_groups(model, weight_decay):
+    """
+    Create parameter groups with proper weight decay exclusions.
+    
+    Excludes from weight decay:
+    - LayerNorms (RMSNorm in our case)
+    - Biases (if any)
+    - Embeddings and positional embeddings
+    
+    This prevents regularization from hurting these sensitive parameters.
+    """
+    decay_params = []
+    no_decay_params = []
+    
+    for name, param in model.named_parameters():
+        if not param.requires_grad:
+            continue
+            
+        # Check if parameter should be excluded from weight decay
+        if any(nd in name for nd in ['ln_', 'norm', 'bias', 'wte', 'wpe', 'rope_cache']):
+            # LayerNorms, biases, embeddings - no weight decay
+            no_decay_params.append(param)
+        else:
+            # Linear layers, attention weights - apply weight decay
+            decay_params.append(param)
+    
+    # Create parameter groups
+    param_groups = [
+        {'params': decay_params, 'weight_decay': weight_decay},
+        {'params': no_decay_params, 'weight_decay': 0.0}
+    ]
+    
+    # Report statistics
+    num_decay = sum(p.numel() for p in decay_params)
+    num_no_decay = sum(p.numel() for p in no_decay_params)
+    total_params = num_decay + num_no_decay
+    
+    print(f"Optimizer groups created:")
+    print(f"  With weight decay: {num_decay:,} params ({100*num_decay/total_params:.1f}%)")
+    print(f"  No weight decay: {num_no_decay:,} params ({100*num_no_decay/total_params:.1f}%)")
+    
+    return param_groups
+
 def load_pretrained_model(checkpoint_path, config, device='cuda'):
     """Load the pretrained elite model."""
     print(f"Loading pretrained model from {checkpoint_path}")
@@ -237,12 +280,13 @@ def save_checkpoint(model, optimizer, config, iter_num, val_loss, checkpoint_pat
 def train():
     """Main SFT training loop."""
     parser = argparse.ArgumentParser()
-    parser.add_argument('--batch_size', type=int, help='Batch size')
+    parser.add_argument('--batch_size', type=int, default=8, help='Batch size (default: 8)')
+    parser.add_argument('--grad_accum', type=int, default=1, help='Gradient accumulation steps (default: 1)')
     parser.add_argument('--data_dir', type=str, default='data_sft', help='SFT data directory')
     parser.add_argument('--base_model', type=str, default='best_model_fp8_optimized.pt', help='Base pretrained model')
-    parser.add_argument('--max_iters', type=int, default=3000, help='Max iterations')
-    parser.add_argument('--learning_rate', type=float, default=3e-4, help='Learning rate')
-    parser.add_argument('--eval_interval', type=int, default=100, help='Eval interval')
+    parser.add_argument('--max_iters', type=int, default=800, help='Max iterations (default: 800 = 1 epoch)')
+    parser.add_argument('--learning_rate', type=float, default=7e-5, help='Learning rate (default: 7e-5, balanced)')
+    parser.add_argument('--eval_interval', type=int, default=50, help='Eval interval (default: 50)')
     parser.add_argument('--log_interval', type=int, default=10, help='Log interval')
     parser.add_argument('--no_fp8', action='store_true', help='Disable FP8')
     parser.add_argument('--no_wandb', action='store_true', help='Disable Weights & Biases logging')
@@ -252,6 +296,8 @@ def train():
     config = SFTConfig()
     if args.batch_size:
         config.batch_size = args.batch_size
+    if args.grad_accum:
+        config.gradient_accumulation_steps = args.grad_accum
     if args.no_fp8:
         config.use_fp8 = False
     
@@ -268,13 +314,15 @@ def train():
     # Get FP8 recipe
     fp8_recipe = get_fp8_recipe(model_config)
     
-    # Optimizer - fresh start for SFT
+    # Create parameter groups with proper weight decay exclusions
+    param_groups = create_optimizer_groups(model, config.weight_decay)
+    
+    # Optimizer - fresh start for SFT with parameter groups
     optimizer = torch.optim.AdamW(
-        model.parameters(),
+        param_groups,
         lr=config.learning_rate,
         betas=(config.beta1, config.beta2),
-        weight_decay=config.weight_decay,
-        fused=True
+        fused=True  # Use fused optimizer for speed
     )
     
     # Data loader
@@ -299,7 +347,8 @@ def train():
     print(f"Architecture: {model_config.n_layer}L, {model_config.n_head}H, {model_config.n_embd}D")
     print(f"Parameters: {model.num_parameters()/1e6:.1f}M")
     print(f"SFT Config:")
-    print(f"  - Learning rate: {config.learning_rate:.2e} (aggressive)")
+    print(f"  - Learning rate: {config.learning_rate:.2e} (balanced)")
+    print(f"  - Weight decay: {config.weight_decay} (excludes norms/bias)")
     print(f"  - Batch size: {config.batch_size}")
     print(f"  - Gradient accumulation: {config.gradient_accumulation_steps}")
     print(f"  - Effective batch: {config.batch_size * config.gradient_accumulation_steps}")

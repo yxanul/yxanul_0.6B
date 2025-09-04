@@ -79,6 +79,50 @@ def load_gsm8k_data(file_path: str) -> List[Dict]:
     
     return formatted_data
 
+def load_dolly_data(file_path: str) -> List[Dict]:
+    """Load and format Databricks Dolly-15k dataset."""
+    print(f"\nLoading Dolly-15k data from {file_path}")
+    formatted_data = []
+    
+    with open(file_path, 'r', encoding='utf-8') as f:
+        for line in f:
+            item = json.loads(line)
+            
+            # Dolly has instruction, context (optional), and response fields
+            if item.get('context', '').strip():
+                # Has context - combine instruction and context
+                user_content = f"{item['instruction']}\n\nContext: {item['context']}"
+            else:
+                # No context, just instruction
+                user_content = item['instruction']
+            
+            # Skip if response is empty
+            if not item.get('response', '').strip():
+                continue
+            
+            formatted_data.append({
+                'messages': [
+                    {'role': 'user', 'content': user_content},
+                    {'role': 'assistant', 'content': item['response']}
+                ],
+                'source': 'dolly',
+                'category': item.get('category', 'unknown')  # Dolly has task categories
+            })
+    
+    print(f"  Loaded {len(formatted_data)} examples")
+    
+    # Show category distribution
+    categories = {}
+    for item in formatted_data:
+        cat = item.get('category', 'unknown')
+        categories[cat] = categories.get(cat, 0) + 1
+    
+    print("  Categories:")
+    for cat, count in sorted(categories.items(), key=lambda x: -x[1])[:5]:
+        print(f"    - {cat}: {count}")
+    
+    return formatted_data
+
 def create_training_example(messages: List[Dict], tokenizer, max_length: int = 2048) -> Dict:
     """
     Create a single training example with PROPER EOS tokens.
@@ -104,25 +148,36 @@ def create_training_example(messages: List[Dict], tokenizer, max_length: int = 2
         content = message['content'].strip()
         
         if role == 'user':
-            # Format and tokenize user input
-            user_text = f"User: {content}\n"
-            user_tokens = tokenizer.encode(user_text, add_special_tokens=False)
+            # Format user input with header
+            header = "User: "
+            header_tokens = tokenizer.encode(header, add_special_tokens=False)
             
-            # Add to sequence
+            # Tokenize the content
+            content_text = content.strip() + "\n"
+            content_tokens = tokenizer.encode(content_text, add_special_tokens=False)
+            
+            # Add to sequence: header + content
+            user_tokens = header_tokens + content_tokens
             input_ids.extend(user_tokens)
-            labels.extend([-100] * len(user_tokens))  # Mask user input
+            labels.extend([-100] * len(user_tokens))  # Mask entire user input
             
         elif role == 'assistant':
-            # Format and tokenize assistant response
-            assistant_text = f"Assistant: {content}\n"
-            assistant_tokens = tokenizer.encode(assistant_text, add_special_tokens=False)
+            # Format assistant response with MASKED header
+            header = "Assistant: "
+            header_tokens = tokenizer.encode(header, add_special_tokens=False)
+            
+            # Tokenize the actual response content
+            response_text = content.strip() + "\n"
+            response_tokens = tokenizer.encode(response_text, add_special_tokens=False)
             
             # CRITICAL: Add EOS token after assistant response
-            assistant_tokens.append(tokenizer.eos_token_id)
+            response_tokens.append(tokenizer.eos_token_id)
             
-            # Add to sequence
-            input_ids.extend(assistant_tokens)
-            labels.extend(assistant_tokens)  # Predict assistant response INCLUDING EOS
+            # Add to sequence: header + response
+            input_ids.extend(header_tokens + response_tokens)
+            
+            # Labels: MASK header, PREDICT response (including EOS)
+            labels.extend([-100] * len(header_tokens) + response_tokens)
     
     # Truncate if needed
     if len(input_ids) > max_length:
@@ -138,12 +193,13 @@ def create_training_example(messages: List[Dict], tokenizer, max_length: int = 2
 def process_datasets(
     alpaca_path: str = None,
     gsm8k_path: str = None,
+    dolly_path: str = None,
     output_dir: str = 'data_sft_clean',
     max_examples: int = None,
     max_length: int = 2048,
     val_split: float = 0.05
 ):
-    """Process both datasets and create training files."""
+    """Process all datasets and create training files."""
     
     # Load tokenizer
     tokenizer = load_tokenizer()
@@ -160,6 +216,11 @@ def process_datasets(
         gsm8k_data = load_gsm8k_data(gsm8k_path)
         all_data.extend(gsm8k_data)
         print(f"  Added {len(gsm8k_data)} GSM8K examples")
+    
+    if dolly_path and Path(dolly_path).exists():
+        dolly_data = load_dolly_data(dolly_path)
+        all_data.extend(dolly_data)
+        print(f"  Added {len(dolly_data)} Dolly-15k examples")
     
     if not all_data:
         raise ValueError("No data loaded! Check file paths.")
@@ -251,7 +312,8 @@ def process_datasets(
         'bos_token_id': tokenizer.bos_token_id,
         'sources': {
             'alpaca': alpaca_path is not None,
-            'gsm8k': gsm8k_path is not None
+            'gsm8k': gsm8k_path is not None,
+            'dolly': dolly_path is not None
         },
         'format': 'clean_sft_with_eos'
     }
@@ -276,6 +338,8 @@ def main():
                        help='Path to Alpaca JSON file')
     parser.add_argument('--gsm8k', type=str, default='train-00000-of-00001.parquet',
                        help='Path to GSM8K parquet file')
+    parser.add_argument('--dolly', type=str, default='databricks-dolly-15k.jsonl',
+                       help='Path to Dolly-15k JSONL file')
     parser.add_argument('--output_dir', type=str, default='data_sft_clean',
                        help='Output directory')
     parser.add_argument('--max_examples', type=int, default=None,
@@ -291,6 +355,7 @@ def main():
     metadata = process_datasets(
         alpaca_path=args.alpaca if Path(args.alpaca).exists() else None,
         gsm8k_path=args.gsm8k if Path(args.gsm8k).exists() else None,
+        dolly_path=args.dolly if Path(args.dolly).exists() else None,
         output_dir=args.output_dir,
         max_examples=args.max_examples,
         max_length=args.max_length,

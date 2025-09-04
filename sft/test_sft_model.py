@@ -36,7 +36,7 @@ def load_sft_model(checkpoint_path='checkpoints_sft/best_sft_model.pt'):
         model = model.cuda()
         print(f"  Using GPU: {torch.cuda.get_device_name(0)}")
     else:
-        print("  ⚠️  WARNING: Running on CPU - will be slow!")
+        print("  WARNING: Running on CPU - will be slow!")
     
     # Load checkpoint
     checkpoint_info = model.load_from_te_checkpoint(checkpoint_path)
@@ -75,8 +75,8 @@ def generate_response(model, tokenizer, user_input, max_new_tokens=150, temperat
     if next(model.parameters()).is_cuda:
         input_ids = input_ids.cuda()
     
-    print(f"\n👤 User: {user_input}")
-    print("🤖 Assistant: ", end="", flush=True)
+    print(f"\nUser: {user_input}")
+    print("Assistant: ", end="", flush=True)
     
     start_time = time.time()
     
@@ -90,14 +90,18 @@ def generate_response(model, tokenizer, user_input, max_new_tokens=150, temperat
             logits, _ = model(generated_ids)
         
         # Get last token logits
-        logits = logits[:, -1, :] / temperature
+        if temperature > 0:
+            logits = logits[:, -1, :] / temperature
+        else:
+            # Greedy decoding (temperature=0)
+            logits = logits[:, -1, :]
         
         # Apply repetition penalty
         if repetition_penalty != 1.0:
             for token_id in set(generated_ids[0].tolist()[response_start:]):  # Only penalize response tokens
                 logits[0, token_id] /= repetition_penalty
         
-        # Apply top-k filtering
+        # Apply top-k filtering (skip if top_k=0 for greedy)
         if top_k > 0:
             v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
             logits[logits < v[:, [-1]]] = -float('inf')
@@ -114,9 +118,14 @@ def generate_response(model, tokenizer, user_input, max_new_tokens=150, temperat
             indices_to_remove = sorted_indices_to_remove.scatter(1, sorted_indices, sorted_indices_to_remove)
             logits[indices_to_remove] = -float('inf')
         
-        # Sample
-        probs = F.softmax(logits, dim=-1)
-        next_token = torch.multinomial(probs, num_samples=1)
+        # Sample or greedy decode
+        if temperature == 0 or top_k == 0:
+            # Greedy decoding: take argmax
+            next_token = torch.argmax(logits, dim=-1, keepdim=True)
+        else:
+            # Sample
+            probs = F.softmax(logits, dim=-1)
+            next_token = torch.multinomial(probs, num_samples=1)
         
         # Decode token to check for stop
         token_text = tokenizer.decode(next_token[0], skip_special_tokens=False)
@@ -152,88 +161,303 @@ def generate_response(model, tokenizer, user_input, max_new_tokens=150, temperat
     
     elapsed = time.time() - start_time
     tokens_generated = generated_ids.shape[1] - input_ids.shape[1]
-    print(f"⏱️  Generated {tokens_generated} tokens in {elapsed:.2f}s ({tokens_generated/elapsed:.1f} tok/s)")
+    print(f"[TIME] Generated {tokens_generated} tokens in {elapsed:.2f}s ({tokens_generated/elapsed:.1f} tok/s)")
     
     return response
 
 def run_instruction_tests(model, tokenizer):
     """Run comprehensive instruction-following tests."""
     print("\n" + "="*60)
-    print("INSTRUCTION-FOLLOWING TEST SUITE")
-    print("Testing SFT Model Quality")
+    print("COMPREHENSIVE MODEL EVALUATION SUITE")
+    print("Testing with Low Temperature for Deterministic Output")
     print("="*60)
     
     test_cases = [
-        # Basic Q&A
+        # === KNOWLEDGE & TRIVIA ===
         {
             "input": "What is the capital of France?",
-            "category": "Factual Q&A",
-            "temperature": 0.5
+            "category": "Geography",
+            "temperature": 0.0,
+            "top_k": 0,
+            "top_p": 1.0,
+            "max_tokens": 16,
+            "repetition_penalty": 1.0
         },
-        
-        # Explanation
         {
-            "input": "Explain photosynthesis in simple terms.",
-            "category": "Explanation",
-            "temperature": 0.7
+            "input": "Who wrote Romeo and Juliet?",
+            "category": "Literature",
+            "temperature": 0.0,
+            "top_k": 0,
+            "top_p": 1.0,
+            "max_tokens": 16,
+            "repetition_penalty": 1.0
         },
-        
-        # Creative writing
         {
-            "input": "Write a haiku about artificial intelligence.",
-            "category": "Creative",
-            "temperature": 0.8
+            "input": "What year did World War II end?",
+            "category": "History",
+            "temperature": 0.0,
+            "top_k": 0,
+            "top_p": 1.0,
+            "max_tokens": 16,
+            "repetition_penalty": 1.0
+        },
+        {
+            "input": "What is the chemical symbol for gold?",
+            "category": "Science",
+            "temperature": 0.0,
+            "top_k": 0,
+            "top_p": 1.0,
+            "max_tokens": 16,
+            "repetition_penalty": 1.0
+        },
+        {
+            "input": "How many planets are in our solar system?",
+            "category": "Astronomy",
+            "temperature": 0.0,
+            "top_k": 0,
+            "top_p": 1.0,
+            "max_tokens": 16,
+            "repetition_penalty": 1.0
         },
         
-        # Math/Reasoning
+        # === MATH PROBLEMS (Varying Difficulty) ===
+        {
+            "input": "What is 7 + 8?",
+            "category": "Math: Basic Addition",
+            "temperature": 0.0,
+            "top_k": 0,
+            "top_p": 1.0,
+            "max_tokens": 16,
+            "repetition_penalty": 1.0
+        },
+        {
+            "input": "Calculate 15 * 4",
+            "category": "Math: Multiplication",
+            "temperature": 0.0,
+            "top_k": 0,
+            "top_p": 1.0,
+            "max_tokens": 16,
+            "repetition_penalty": 1.0
+        },
         {
             "input": "If I have 3 apples and buy 5 more, then give 2 to a friend, how many do I have?",
-            "category": "Math Reasoning",
+            "category": "Math: Word Problem Easy",
+            "temperature": 0.0,
+            "top_k": 0,
+            "top_p": 1.0,
+            "max_tokens": 32,
+            "repetition_penalty": 1.0
+        },
+        {
+            "input": "A train travels 60 miles in 1.5 hours. What is its average speed?",
+            "category": "Math: Word Problem Medium",
+            "temperature": 0.0,
+            "top_k": 0,
+            "top_p": 1.0,
+            "max_tokens": 32,
+            "repetition_penalty": 1.0
+        },
+        {
+            "input": "If x + 3 = 10, what is x?",
+            "category": "Math: Simple Algebra",
+            "temperature": 0.0,
+            "top_k": 0,
+            "top_p": 1.0,
+            "max_tokens": 16,
+            "repetition_penalty": 1.0
+        },
+        
+        # === INSTRUCTION FOLLOWING ===
+        {
+            "input": "Write exactly 3 words.",
+            "category": "Instruction: Count Constraint",
+            "temperature": 0.0,
+            "top_k": 0,
+            "top_p": 1.0,
+            "max_tokens": 8,
+            "repetition_penalty": 1.0
+        },
+        {
+            "input": "Write the word 'hello' in ALL CAPS.",
+            "category": "Instruction: Format",
+            "temperature": 0.0,
+            "top_k": 0,
+            "top_p": 1.0,
+            "max_tokens": 8,
+            "repetition_penalty": 1.0
+        },
+        {
+            "input": "List the numbers from 1 to 5.",
+            "category": "Instruction: Sequence",
+            "temperature": 0.0,
+            "top_k": 0,
+            "top_p": 1.0,
+            "max_tokens": 16,
+            "repetition_penalty": 1.0
+        },
+        {
+            "input": "Answer with only 'yes' or 'no': Is the sky blue?",
+            "category": "Instruction: Binary Choice",
+            "temperature": 0.0,
+            "top_k": 0,
+            "top_p": 1.0,
+            "max_tokens": 4,
+            "repetition_penalty": 1.0
+        },
+        {
+            "input": "Complete this sentence: The cat sat on the ___",
+            "category": "Instruction: Fill Blank",
+            "temperature": 0.0,
+            "top_k": 0,
+            "top_p": 1.0,
+            "max_tokens": 8,
+            "repetition_penalty": 1.0
+        },
+        
+        # === REASONING & COMPREHENSION ===
+        {
+            "input": "Which is bigger: an elephant or a mouse?",
+            "category": "Reasoning: Comparison",
+            "temperature": 0.1
+        },
+        {
+            "input": "If all birds can fly, and a penguin is a bird, can a penguin fly?",
+            "category": "Reasoning: Logic",
+            "temperature": 0.1
+        },
+        {
+            "input": "It's raining. Should I take an umbrella? Answer yes or no and explain why.",
+            "category": "Reasoning: Common Sense",
+            "temperature": 0.1
+        },
+        {
+            "input": "What comes next in this pattern: 2, 4, 6, 8, ?",
+            "category": "Reasoning: Pattern",
+            "temperature": 0.1
+        },
+        {
+            "input": "If today is Monday, what day will it be in 3 days?",
+            "category": "Reasoning: Temporal",
+            "temperature": 0.1
+        },
+        
+        # === CODE & TECHNICAL ===
+        {
+            "input": "Write a Python print statement that outputs 'Hello World'",
+            "category": "Code: Basic",
+            "temperature": 0.1
+        },
+        {
+            "input": "What is a variable in programming?",
+            "category": "Code: Concept",
+            "temperature": 0.1
+        },
+        {
+            "input": "Write a Python function to add two numbers.",
+            "category": "Code: Function",
+            "temperature": 0.1
+        },
+        
+        # === LANGUAGE TASKS ===
+        {
+            "input": "What is the opposite of 'hot'?",
+            "category": "Language: Antonym",
+            "temperature": 0.0,
+            "top_k": 0,
+            "top_p": 1.0,
+            "max_tokens": 8,
+            "repetition_penalty": 1.0
+        },
+        {
+            "input": "What is the plural of 'mouse'?",
+            "category": "Language: Grammar",
+            "temperature": 0.0,
+            "top_k": 0,
+            "top_p": 1.0,
+            "max_tokens": 8,
+            "repetition_penalty": 1.0
+        },
+        {
+            "input": "Translate 'hello' to Spanish.",
+            "category": "Language: Translation",
+            "temperature": 0.0,
+            "top_k": 0,
+            "top_p": 1.0,
+            "max_tokens": 8,
+            "repetition_penalty": 1.0
+        },
+        {
+            "input": "Fix this sentence: 'Me go store yesterday'",
+            "category": "Language: Correction",
+            "temperature": 0.0,
+            "top_k": 0,
+            "top_p": 1.0,
+            "max_tokens": 16,
+            "repetition_penalty": 1.0
+        },
+        
+        # === EXPLANATION TASKS ===
+        {
+            "input": "Explain gravity in one sentence.",
+            "category": "Explanation: Science",
+            "temperature": 0.1
+        },
+        {
+            "input": "What is photosynthesis?",
+            "category": "Explanation: Biology",
+            "temperature": 0.1
+        },
+        {
+            "input": "Why is the sky blue?",
+            "category": "Explanation: Physics",
+            "temperature": 0.1
+        },
+        
+        # === CREATIVE (Higher temp for variety) ===
+        {
+            "input": "Write a haiku about artificial intelligence.",
+            "category": "Creative: Poetry",
+            "temperature": 0.5
+        },
+        {
+            "input": "Generate a creative name for a robot.",
+            "category": "Creative: Naming",
             "temperature": 0.5
         },
         
-        # Code generation
+        # === CLASSIFICATION ===
         {
-            "input": "Write a Python function to reverse a string.",
-            "category": "Code Generation",
-            "temperature": 0.5
+            "input": "Is 'happy' a noun or an adjective?",
+            "category": "Classification: Grammar",
+            "temperature": 0.0,
+            "top_k": 0,
+            "top_p": 1.0,
+            "max_tokens": 8,
+            "repetition_penalty": 1.0
         },
-        
-        # Summarization
         {
-            "input": "Summarize the following in one sentence: Machine learning is a subset of artificial intelligence that enables systems to learn and improve from experience without being explicitly programmed. It focuses on developing computer programs that can access data and use it to learn for themselves.",
-            "category": "Summarization",
-            "temperature": 0.6
+            "input": "Classify this sentence as positive or negative: 'I love this movie!'",
+            "category": "Classification: Sentiment",
+            "temperature": 0.0,
+            "top_k": 0,
+            "top_p": 1.0,
+            "max_tokens": 8,
+            "repetition_penalty": 1.0
         },
-        
-        # List generation
         {
-            "input": "List 3 benefits of regular exercise.",
-            "category": "List Generation",
-            "temperature": 0.7
-        },
-        
-        # Translation/Transformation
-        {
-            "input": "Convert this to a more formal tone: 'Hey, can you help me out with this thing?'",
-            "category": "Style Transfer",
-            "temperature": 0.6
-        },
-        
-        # Instruction following
-        {
-            "input": "Write the word 'hello' in exactly 5 different ways.",
-            "category": "Instruction Following",
-            "temperature": 0.7
-        },
-        
-        # Open-ended
-        {
-            "input": "What are your thoughts on the future of technology?",
-            "category": "Open Discussion",
-            "temperature": 0.8
+            "input": "Is a tomato a fruit or a vegetable?",
+            "category": "Classification: Knowledge",
+            "temperature": 0.0,
+            "top_k": 0,
+            "top_p": 1.0,
+            "max_tokens": 8,
+            "repetition_penalty": 1.0
         }
     ]
+    
+    # Track results for summary
+    results_by_category = {}
+    all_results = []
     
     for i, test in enumerate(test_cases, 1):
         print(f"\n[Test {i}/{len(test_cases)}] Category: {test['category']}")
@@ -242,27 +466,77 @@ def run_instruction_tests(model, tokenizer):
         response = generate_response(
             model, tokenizer,
             test["input"],
-            max_new_tokens=150,
+            max_new_tokens=test.get("max_tokens", 150),
             temperature=test.get("temperature", 0.7),
-            top_k=40,
-            top_p=0.85,
-            repetition_penalty=1.1
+            top_k=test.get("top_k", 40),
+            top_p=test.get("top_p", 0.85),
+            repetition_penalty=test.get("repetition_penalty", 1.1)
         )
         
-        print(f"\n💬 Response:\n{response}")
+        print(f"\n[RESPONSE]\n{response}")
         print("-"*60)
         
+        # Store result for analysis
+        result = {
+            "category": test["category"],
+            "input": test["input"],
+            "response": response,
+            "temperature": test.get("temperature", 0.7)
+        }
+        all_results.append(result)
+        
+        # Group by category prefix
+        category_prefix = test["category"].split(":")[0]
+        if category_prefix not in results_by_category:
+            results_by_category[category_prefix] = []
+        results_by_category[category_prefix].append(result)
+        
         # Brief pause between tests
-        time.sleep(0.5)
+        time.sleep(0.2)
+    
+    # Print comprehensive summary
+    print("\n" + "="*60)
+    print("EVALUATION SUMMARY")
+    print("="*60)
+    
+    print("\n📊 RESULTS BY CATEGORY:")
+    print("-"*40)
+    
+    for category, results in sorted(results_by_category.items()):
+        print(f"\n{category} ({len(results)} tests):")
+        for r in results[:3]:  # Show first 3 examples
+            input_preview = r["input"][:50] + "..." if len(r["input"]) > 50 else r["input"]
+            response_preview = r["response"][:50] + "..." if len(r["response"]) > 50 else r["response"]
+            print(f"  Q: {input_preview}")
+            print(f"  A: {response_preview}")
     
     print("\n" + "="*60)
-    print("INSTRUCTION TEST SUITE COMPLETE!")
-    print("Quality Checklist:")
-    print("  ✅ Response Relevance: Does it answer the question?")
-    print("  ✅ Instruction Following: Does it follow specific instructions?")
-    print("  ✅ Coherence: Are responses well-structured?")
-    print("  ✅ Knowledge: Are facts reasonable?")
-    print("  ✅ Format: Does it maintain User/Assistant format?")
+    print("CAPABILITY ASSESSMENT")
+    print("="*60)
+    
+    print("\n✅ STRENGTHS (What the model learned):")
+    print("  • Conversation format (User/Assistant structure)")
+    print("  • Basic response generation")
+    print("  • Some code formatting patterns")
+    
+    print("\n⚠️ WEAKNESSES (Areas needing improvement):")
+    print("  • Factual accuracy")
+    print("  • Mathematical computation")
+    print("  • Logical reasoning")
+    print("  • Instruction precision")
+    
+    print("\n📈 INSIGHTS:")
+    print("  • Lower temperature (0.1) reveals deterministic patterns")
+    print("  • Model shows format learning > semantic understanding")
+    print("  • 112M parameters + 3hr training = pattern matching, not reasoning")
+    print("  • GSM8K format learned but computation fails")
+    
+    print("\n💡 RECOMMENDATIONS:")
+    print("  • More pretraining would improve base knowledge")
+    print("  • Focused math dataset for arithmetic capabilities")
+    print("  • Instruction diversity needed for better following")
+    print("  • Consider knowledge distillation from larger models")
+    
     print("="*60)
 
 def interactive_chat(model, tokenizer):
@@ -273,18 +547,18 @@ def interactive_chat(model, tokenizer):
     print("="*60)
     
     settings = {
-        'temperature': 0.7,
+        'temperature': 0.1,
         'top_k': 40,
         'top_p': 0.85,
         'repetition_penalty': 1.1,
-        'max_tokens': 150
+        'max_tokens': 550
     }
     
-    print("\n🎯 This is an instruction-tuned model.")
+    print("\n[INFO] This is an instruction-tuned model.")
     print("   Just type your questions or requests naturally!")
     
     while True:
-        user_input = input("\n👤 You: ").strip()
+        user_input = input("\nYou: ").strip()
         
         if user_input.lower() == 'quit':
             break
@@ -299,16 +573,16 @@ def interactive_chat(model, tokenizer):
         elif user_input.startswith('temp='):
             try:
                 settings['temperature'] = float(user_input.split('=')[1])
-                print(f"✅ Temperature set to {settings['temperature']}")
+                print(f"[OK] Temperature set to {settings['temperature']}")
             except:
-                print("❌ Invalid temperature")
+                print("[ERROR] Invalid temperature")
             continue
         elif user_input.startswith('max='):
             try:
                 settings['max_tokens'] = int(user_input.split('=')[1])
-                print(f"✅ Max tokens set to {settings['max_tokens']}")
+                print(f"[OK] Max tokens set to {settings['max_tokens']}")
             except:
-                print("❌ Invalid max tokens")
+                print("[ERROR] Invalid max tokens")
             continue
         
         if user_input:
@@ -320,7 +594,7 @@ def interactive_chat(model, tokenizer):
                 top_p=settings['top_p'],
                 repetition_penalty=settings['repetition_penalty']
             )
-            print(f"\n🤖 Assistant:\n{response}")
+            print(f"\nAssistant:\n{response}")
 
 def main():
     import argparse
@@ -337,7 +611,7 @@ def main():
     
     # Check if checkpoint exists
     if not Path(args.checkpoint).exists():
-        print(f"❌ Error: Checkpoint '{args.checkpoint}' not found!")
+        print(f"[ERROR] Checkpoint '{args.checkpoint}' not found!")
         print(f"   Looking for: {args.checkpoint}")
         print(f"   Make sure SFT training has completed and saved the model.")
         return
@@ -346,7 +620,7 @@ def main():
     model, config = load_sft_model(args.checkpoint)
     tokenizer = get_tokenizer()
     
-    print("\n🚀 SFT Model Ready!")
+    print("\n[READY] SFT Model Ready!")
     print(f"   Type: Instruction-tuned")
     print(f"   Base: Elite 2.218 val loss model")
     print(f"   Training: 200k conversations")
@@ -358,14 +632,14 @@ def main():
         interactive_chat(model, tokenizer)
     elif args.mode == 'single':
         if not args.input:
-            print("❌ Please provide an instruction with --input")
+            print("[ERROR] Please provide an instruction with --input")
             return
         response = generate_response(
             model, tokenizer, args.input,
             max_new_tokens=args.max_tokens,
             temperature=args.temperature
         )
-        print(f"\n💬 Response:\n{response}")
+        print(f"\n[RESPONSE]\n{response}")
 
 if __name__ == "__main__":
     main()
