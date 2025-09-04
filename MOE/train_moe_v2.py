@@ -380,7 +380,7 @@ def main():
     parser.add_argument("--grad_accum_steps", type=int, default=1, help="Gradient accumulation steps")
     parser.add_argument("--learning_rate", type=float, default=6e-4, help="Learning rate")
     parser.add_argument("--weight_decay", type=float, default=0.1, help="Weight decay")
-    parser.add_argument("--dropout", type=float, default=0.1, help="Dropout rate")
+    parser.add_argument("--dropout", type=float, default=0.05, help="Dropout rate")
     parser.add_argument("--grad_clip", type=float, default=1.0, help="Gradient clipping")
     
     # Schedule

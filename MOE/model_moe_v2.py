@@ -382,8 +382,8 @@ class CausalSelfAttention(nn.Module):
             scale = 1.0 / math.sqrt(self.config.head_dim)
             scores = torch.matmul(q, k.transpose(-2, -1)) * scale
             
-            # Causal mask (cache this in __init__ for better performance)
-            if not hasattr(self, '_causal_mask') or self._causal_mask.shape[0] < T:
+            # Causal mask (cache for better performance)
+            if self._causal_mask is None or self._causal_mask.shape[0] < T:
                 self._causal_mask = torch.triu(torch.ones(T, T, device=x.device, dtype=torch.bool), diagonal=1)
             mask = self._causal_mask[:T, :T]
             scores = scores.masked_fill(mask, float('-inf'))
