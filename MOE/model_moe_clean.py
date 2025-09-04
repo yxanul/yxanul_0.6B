@@ -56,7 +56,7 @@ class MoEConfig:
     # MoE configuration
     num_experts: int = 4  # 4 experts for better GPU utilization
     top_k: int = 2  # Top-2 routing (50% active with 4 experts)
-    capacity_factor: float = 1.25  # Conservative capacity
+    capacity_factor: float = 1.5  # Higher capacity = more tokens per expert
     router_aux_loss_coef: float = 0.01  # Load balancing
     router_z_loss_coef: float = 0.001  # Small z-loss for stability
     router_jitter_noise: float = 0.01  # Small noise during training
@@ -366,50 +366,57 @@ class MoEFeedForward(nn.Module):
         # Track expert usage for monitoring
         expert_usage = torch.zeros(self.num_experts, device=x.device, dtype=x.dtype)
         
-        # Process through experts
+        # Process through experts - OPTIMIZED: Process pairs of experts together
         output = torch.zeros_like(x_flat)
         
-        for e, expert in enumerate(self.experts):
-            # Get tokens for this expert (both top-1 and top-2)
-            expert_mask = dispatch_mask[:, e, :].any(dim=-1)
-            if not expert_mask.any():
-                continue
+        # Process experts in pairs for better GPU utilization
+        for e_pair_start in range(0, self.num_experts, 2):
+            batch_inputs = []
+            batch_experts = []
+            batch_masks = []
+            batch_weights = []
+            
+            # Collect up to 2 experts to process together
+            for e in range(e_pair_start, min(e_pair_start + 2, self.num_experts)):
+                expert_mask = dispatch_mask[:, e, :].any(dim=-1)
+                if not expert_mask.any():
+                    continue
+                    
+                expert_input = x_flat[expert_mask]
+                num_tokens = expert_input.shape[0]
                 
-            expert_input = x_flat[expert_mask]
-            num_tokens = expert_input.shape[0]
+                # Track usage for this expert
+                expert_usage[e] = num_tokens / (B * T)
+                
+                # PATCH 2: FP8 alignment - pad to multiple of 16
+                if self.fp8_pad_for_moe and num_tokens > 0:
+                    padded_size = ((num_tokens + 15) // 16) * 16
+                    if padded_size != num_tokens:
+                        pad_size = padded_size - num_tokens
+                        expert_input = torch.cat([
+                            expert_input,
+                            torch.zeros(pad_size, expert_input.shape[1], 
+                                       device=expert_input.device, dtype=expert_input.dtype)
+                        ], dim=0)
+                
+                batch_inputs.append(expert_input)
+                batch_experts.append(self.experts[e])
+                batch_masks.append(expert_mask)
+                batch_weights.append(combine_weights[expert_mask, e, :].sum(dim=-1, keepdim=True))
             
-            # Note: Even small batches will be padded to 16 for FP8 safety
-            if num_tokens < 16 and self.fp8_pad_for_moe:
-                # Small batches will be padded up to 16 tokens
-                pass
-            
-            # Track usage for this expert
-            expert_usage[e] = num_tokens / (B * T)
-            
-            # PATCH 2: FP8 alignment - pad to multiple of 16 for safer backward pass
-            # Pad if necessary for FP8 execution
-            padded = False
-            if self.fp8_pad_for_moe and num_tokens > 0:
-                # Pad to multiple of 16 for more reliable FP8 GEMM in backward
-                padded_size = ((num_tokens + 15) // 16) * 16
-                if padded_size != num_tokens:
-                    pad_size = padded_size - num_tokens
-                    expert_input = torch.cat([
-                        expert_input,
-                        torch.zeros(pad_size, expert_input.shape[1], 
-                                   device=expert_input.device, dtype=expert_input.dtype)
-                    ], dim=0)
-                    padded = True
-            
-            expert_output = expert(expert_input)
-            
-            # Remove padding if we added any
-            if padded:
-                expert_output = expert_output[:num_tokens]
-            
-            # Combine with weights - ensure dtype match
-            weights = combine_weights[expert_mask, e, :].sum(dim=-1, keepdim=True)
-            output[expert_mask] = output[expert_mask] + (expert_output * weights).to(output.dtype)
+            # Process batch of experts
+            for i, (expert_input, expert, expert_mask, weights) in enumerate(
+                zip(batch_inputs, batch_experts, batch_masks, batch_weights)):
+                
+                expert_output = expert(expert_input)
+                
+                # Remove padding if needed
+                orig_tokens = expert_mask.sum().item()
+                if expert_output.shape[0] > orig_tokens:
+                    expert_output = expert_output[:orig_tokens]
+                
+                # Combine with weights
+                output[expert_mask] = output[expert_mask] + (expert_output * weights).to(output.dtype)
         
         output = output.view(B, T, C)
         output = self.dropout(output)
