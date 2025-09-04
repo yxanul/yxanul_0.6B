@@ -530,7 +530,7 @@ class OptimizedGPT_GLMini_PRMoE(nn.Module):
     def forward(self, idx: torch.Tensor, targets: Optional[torch.Tensor] = None):
         """
         idx:      [B, T] token ids
-        targets:  [B, T] teacher-forced targets (ignore_index=-1 for padding)
+        targets:  [B, T] teacher-forced targets (ignore_index=3 for padding)
         returns: (logits, loss)
         """
         B, T = idx.size()
@@ -559,7 +559,7 @@ class OptimizedGPT_GLMini_PRMoE(nn.Module):
         if targets is not None:
             # standard next-token CE
             loss = F.cross_entropy(logits.float().view(-1, logits.size(-1)),
-                                   targets.view(-1), ignore_index=-1)
+                                   targets.view(-1), ignore_index=3)  # 3 is pad_token_id
 
             # One MTP layer on top (GLM-style)
             if self.config.use_mtp and self.mtp_layer is not None:
@@ -571,7 +571,7 @@ class OptimizedGPT_GLMini_PRMoE(nn.Module):
                     logits_h = self.lm_head(feats) + bias.view(1,1,-1)
                     tgt_h = targets[:, h:].contiguous()
                     loss_h = F.cross_entropy(logits_h.float().reshape(-1, logits_h.size(-1)),
-                                             tgt_h.view(-1), ignore_index=-1)
+                                             tgt_h.view(-1), ignore_index=3)  # 3 is pad_token_id
                     loss = loss + float(w) * loss_h
 
         return logits, loss
