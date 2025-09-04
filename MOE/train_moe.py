@@ -203,6 +203,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--data_dir", type=str, default="data_mixed_3b")
     parser.add_argument("--batch_size", type=int, default=None)
+    parser.add_argument("--grad_accum_steps", type=int, default=None, help="Gradient accumulation steps")
     parser.add_argument("--max_iters", type=int, default=None)
     parser.add_argument("--eval_interval", type=int, default=None)
     parser.add_argument("--no_fp8", action="store_true")
@@ -213,6 +214,7 @@ def main():
 
     tcfg = TrainingConfig()
     if args.batch_size: tcfg.batch_size = args.batch_size
+    if args.grad_accum_steps: tcfg.gradient_accumulation_steps = args.grad_accum_steps
     if args.max_iters:  tcfg.max_iters  = args.max_iters
     if args.eval_interval: tcfg.eval_interval = args.eval_interval
     if args.no_fp8: tcfg.use_fp8 = False
@@ -248,6 +250,19 @@ def main():
         weight_decay=tcfg.weight_decay,
         fused=True
     )
+
+    # Print configuration
+    print("\n" + "="*60)
+    print("Training Configuration")
+    print("="*60)
+    print(f"Batch size: {tcfg.batch_size}")
+    print(f"Gradient accumulation: {tcfg.grad_accum_steps}")
+    print(f"Effective batch size: {tcfg.batch_size * tcfg.grad_accum_steps}")
+    print(f"Tokens per iteration: {tcfg.batch_size * tcfg.grad_accum_steps * tcfg.block_size:,}")
+    print(f"MTP: {'ENABLED' if mcfg.use_mtp else 'DISABLED'}")
+    print(f"FP8: {'ENABLED' if tcfg.use_fp8 else 'DISABLED'}")
+    print(f"Max iterations: {tcfg.max_iters}")
+    print("="*60 + "\n")
 
     # Data
     loader = DataLoader(tcfg.data_dir, tcfg.block_size, tcfg.device)
