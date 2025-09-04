@@ -309,8 +309,25 @@ class Trainer:
         print(f"  Timing (ms): fwd={avg_forward:.1f}, bwd={avg_backward:.1f}, "
               f"opt={avg_optimizer:.1f}, total={avg_total:.1f}")
         
+        # Collect MoE routing statistics
+        moe_metrics = {}
+        for i, block in enumerate(self.model.blocks):
+            stats = block.moe.router.get_stats()
+            if stats and i % 6 == 0:  # Log every 6th layer to avoid too many metrics
+                layer_prefix = f"moe/layer_{i}"
+                moe_metrics[f"{layer_prefix}/cv"] = stats["cv"]
+                moe_metrics[f"{layer_prefix}/drop_rate"] = stats["drop_rate"]
+                for j, load in enumerate(stats["expert_loads"]):
+                    moe_metrics[f"{layer_prefix}/expert_{j}_load"] = load
+                
+                # Reset counters after logging
+                block.moe.router.expert_counts.zero_()
+                block.moe.router.total_tokens.zero_()
+                block.moe.router.dropped_tokens.zero_()
+        
         if self.use_wandb:
-            self.wandb_logger.log_metrics({
+            # Combine train metrics with MoE metrics
+            all_metrics = {
                 "train/loss": loss,
                 "train/perplexity": np.exp(loss),
                 "train/lr": lr,
@@ -320,7 +337,9 @@ class Trainer:
                 "timing/backward_ms": avg_backward,
                 "timing/optimizer_ms": avg_optimizer,
                 "timing/total_ms": avg_total,
-            }, step=self.step)
+            }
+            all_metrics.update(moe_metrics)  # Add MoE routing stats
+            self.wandb_logger.log_metrics(all_metrics, step=self.step)
     
     def train(self):
         """Main training loop."""
