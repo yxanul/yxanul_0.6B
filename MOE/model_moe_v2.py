@@ -110,37 +110,38 @@ class SwitchRouter(nn.Module):
         
         # For each expert, select top-capacity tokens based on routing scores
         for e in range(self.num_experts):
-            # Find all tokens assigned to this expert
-            expert_mask_e = expert_mask[:, :, e]  # [B, T]
+            # Get routing scores and assignment mask for this expert
+            expert_scores = router_probs[:, :, e]  # [B, T]
+            assign_mask = (expert_indices == e)    # [B, T] - tokens assigned to this expert
             
-            if expert_mask_e.sum() > 0:
-                # Get routing scores for this expert
-                expert_scores = router_probs[:, :, e] * expert_mask_e  # [B, T]
+            # Count assigned tokens
+            num_assigned = int(assign_mask.sum().detach().item())
+            num_tokens = min(num_assigned, capacity)
+            
+            if num_tokens > 0:
+                # Mask out non-assigned tokens explicitly to avoid ties with zeros
+                scores = expert_scores.masked_fill(~assign_mask, float('-inf')).reshape(-1)
+                _, top_idx = scores.topk(num_tokens, dim=0)
                 
-                # Find top-k tokens (up to capacity)
-                num_tokens = min(int(expert_mask_e.sum()), capacity)
+                # Convert to 2D indices
+                b_idx = top_idx // T
+                t_idx = top_idx % T
                 
-                if num_tokens > 0:
-                    # Flatten and get top-k
-                    expert_scores_flat = expert_scores.view(-1)
-                    _, top_indices = expert_scores_flat.topk(num_tokens, dim=0)
-                    
-                    # Convert back to 2D indices
-                    batch_idx = top_indices // T
-                    token_idx = top_indices % T
-                    
-                    # Set dispatch mask
-                    dispatch_mask[batch_idx, token_idx, e] = 1.0
+                # Set dispatch mask
+                dispatch_mask[b_idx, t_idx, e] = 1.0
         
-        # Compute gates (normalized dispatch weights)
-        gates = router_probs * dispatch_mask
-        gates = gates / (gates.sum(dim=-1, keepdim=True) + 1e-6)
+        # Compute gates - for Switch with top-1, these become 1.0 for dispatched tokens
+        # We can simplify since each token goes to exactly 1 expert or none
+        gates = dispatch_mask  # Already 0/1, no need to normalize for Switch
         
-        # Update tracking
+        # Update tracking with proper device handling
         if self.training:
-            self.expert_counts += dispatch_mask.sum(dim=(0, 1))
-            self.total_tokens += batch_tokens
-            self.dropped_tokens += batch_tokens - dispatch_mask.sum()
+            # Ensure all operations are on the same device
+            dispatched = dispatch_mask.sum(dim=(0, 1)).detach()
+            self.expert_counts.add_(dispatched)
+            self.total_tokens.add_(batch_tokens)
+            dropped = batch_tokens - int(dispatch_mask.sum().detach().item())
+            self.dropped_tokens.add_(dropped)
         
         # Compute auxiliary losses
         aux_loss = self.compute_aux_loss(router_probs, dispatch_mask)
@@ -291,11 +292,9 @@ class MoELayer(nn.Module):
             else:
                 expert_output = expert(expert_input)
             
-            # Get gate values
-            gate_values = gates.view(-1, self.config.num_experts)[indices, e].unsqueeze(-1)
-            
-            # Accumulate weighted expert outputs
-            output_flat.index_add_(0, indices, gate_values * expert_output)
+            # For Switch routing with top-1, gates are 1.0 for dispatched tokens
+            # Skip the multiplication for efficiency
+            output_flat.index_add_(0, indices, expert_output)
         
         # Reshape output
         output = output_flat.view(B, T, C)
@@ -337,6 +336,9 @@ class CausalSelfAttention(nn.Module):
         
         # Flash Attention flag
         self.use_flash = FLASH_AVAILABLE
+        
+        # Pre-compute causal mask for efficiency
+        self._causal_mask = None
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         B, T, C = x.shape
@@ -351,13 +353,14 @@ class CausalSelfAttention(nn.Module):
         k = k.view(B, T, self.config.n_kv_head, self.config.head_dim)
         v = v.view(B, T, self.config.n_kv_head, self.config.head_dim)
         
-        if self.use_flash:
-            # Flash Attention with native GQA support
+        if self.use_flash and self.config.n_head == self.config.n_kv_head:
+            # Flash Attention for standard MHA (GQA requires special handling)
             # Flash expects [B, T, H, D] format
             output = flash_attn_func(
                 q, k, v,
                 dropout_p=self.config.dropout if self.training else 0.0,
-                causal=True
+                causal=True,
+                softmax_scale=1.0 / math.sqrt(self.config.head_dim)
             )
             output = output.view(B, T, C)
         else:
@@ -377,8 +380,10 @@ class CausalSelfAttention(nn.Module):
             scale = 1.0 / math.sqrt(self.config.head_dim)
             scores = torch.matmul(q, k.transpose(-2, -1)) * scale
             
-            # Causal mask
-            mask = torch.triu(torch.ones(T, T, device=x.device), diagonal=1).bool()
+            # Causal mask (cache this in __init__ for better performance)
+            if not hasattr(self, '_causal_mask') or self._causal_mask.shape[0] < T:
+                self._causal_mask = torch.triu(torch.ones(T, T, device=x.device, dtype=torch.bool), diagonal=1)
+            mask = self._causal_mask[:T, :T]
             scores = scores.masked_fill(mask, float('-inf'))
             
             attn_weights = F.softmax(scores, dim=-1)
@@ -496,7 +501,7 @@ class MoEModelV2(nn.Module):
         if self.training and self.step % self.config.log_interval == 0:
             self.log_statistics()
         
-        self.step += 1
+        self.step.add_(1)
         
         return logits, loss
     
