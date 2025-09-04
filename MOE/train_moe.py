@@ -207,6 +207,7 @@ def main():
     parser.add_argument("--eval_interval", type=int, default=None)
     parser.add_argument("--no_fp8", action="store_true")
     parser.add_argument("--no_wandb", action="store_true")
+    parser.add_argument("--no_mtp", action="store_true", help="Disable Multi-Token Prediction")
     parser.add_argument("--run_name", type=str, default=None)
     args = parser.parse_args()
 
@@ -225,6 +226,12 @@ def main():
     model, mcfg = build_glm_mini_prmoe_mtp()
     # Ensure block_size matches the training config
     mcfg.block_size = tcfg.block_size
+    # Disable MTP if requested
+    if args.no_mtp:
+        mcfg.use_mtp = False
+        print("[INFO] Multi-Token Prediction DISABLED - should be ~4x faster!")
+        # Rebuild model with updated config
+        model = OptimizedGPT_GLMini_PRMoE(mcfg)
     model = model.to(tcfg.device).to(torch.bfloat16)
 
     # Attach MoE router monitor (records per-batch stats)
