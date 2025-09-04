@@ -3,7 +3,7 @@
 import torch
 import torch.nn.functional as F
 import time
-from model_moe import ModelConfig, GLM_PrMoE
+from model_moe import ModelConfig, OptimizedGPT_GLMini_PRMoE
 from contextlib import contextmanager
 
 @contextmanager
@@ -18,7 +18,7 @@ def timer(name):
 def profile_model():
     # Config
     config = ModelConfig()
-    model = GLM_PrMoE(config).cuda().to(torch.bfloat16)
+    model = OptimizedGPT_GLMini_PRMoE(config).cuda().to(torch.bfloat16)
     
     # Test input
     batch_size = 6
@@ -45,31 +45,42 @@ def profile_model():
     test_input = torch.randn(batch_size, seq_len, config.n_embd).cuda().bfloat16()
     rope_cache = model.rope_cache
     
-    # Profile attention
-    if hasattr(model.transformer.h[0], 'attn'):
+    # Profile first block (dense)
+    if len(model.transformer.h) > 0:
         with torch.no_grad():
-            with timer("Single Attention Layer"):
-                ln_out = model.transformer.h[0].ln_1(test_input)
-                attn_out = model.transformer.h[0].attn(ln_out, rope_cache)
+            with timer("Dense Block (layer 0)"):
+                block_out = model.transformer.h[0](test_input, rope_cache)
     
-    # Profile MoE
-    if hasattr(model.transformer.h[1], 'ffn'):  # MoE layer
+    # Profile MoE block
+    if len(model.transformer.h) > 1:
         with torch.no_grad():
-            with timer("Single MoE Layer"):
-                ln_out = model.transformer.h[1].ln_2(test_input)
-                moe_out = model.transformer.h[1].ffn(ln_out)
-    
-    # Profile routing only
-    if hasattr(model.transformer.h[1].ffn, '_route_sigmoid'):
-        with torch.no_grad():
-            with timer("Router Only"):
-                weights, active = model.transformer.h[1].ffn._route_sigmoid(test_input)
-    
-    # Profile base MLP only
-    if hasattr(model.transformer.h[1].ffn, '_base'):
-        with torch.no_grad():
-            with timer("Base MLP Only"):
-                base_out = model.transformer.h[1].ffn._base(test_input)
+            with timer("MoE Block (layer 1)"):
+                block_out = model.transformer.h[1](test_input, rope_cache)
+        
+        # Profile attention separately
+        if hasattr(model.transformer.h[1], 'attn'):
+            with torch.no_grad():
+                with timer("  - Attention only"):
+                    ln_out = model.transformer.h[1].ln_1(test_input)
+                    attn_out = model.transformer.h[1].attn(ln_out, rope_cache)
+        
+        # Profile MoE separately
+        if hasattr(model.transformer.h[1], 'ffn'):
+            with torch.no_grad():
+                with timer("  - MoE FFN only"):
+                    ln_out = model.transformer.h[1].ln_2(test_input)
+                    moe_out = model.transformer.h[1].ffn(ln_out)
+            
+            # Profile MoE components
+            if hasattr(model.transformer.h[1].ffn, '_route_sigmoid'):
+                with torch.no_grad():
+                    with timer("    - Router only"):
+                        weights, active = model.transformer.h[1].ffn._route_sigmoid(test_input)
+            
+            if hasattr(model.transformer.h[1].ffn, '_base'):
+                with torch.no_grad():
+                    with timer("    - Base MLP only"):
+                        base_out = model.transformer.h[1].ffn._base(test_input)
     
     # Test masked indexing vs index operations
     print("\n=== Indexing Operations Test ===")
