@@ -45,9 +45,9 @@ class MoETrainingConfig:
     n_layer: int = 12
     n_head: int = 12
     n_embd: int = 768
-    vocab_size: int = 32768  # 32k BPE tokenizer
+    vocab_size: int = 32000  # 32k BPE tokenizer
     n_kv_heads: int = 3
-    block_size: int = 4096
+    block_size: int = 2048
     dropout: float = 0.05
     
     # MoE config

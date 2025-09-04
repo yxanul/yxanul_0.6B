@@ -36,13 +36,13 @@ except ImportError:
 
 @dataclass
 class MoEConfig:
-    # Base model (matching your config)
-    vocab_size: int = 32768  # Using 32k BPE tokenizer
+    # Base model
+    vocab_size: int = 32000  # 32k BPE tokenizer
     n_layer: int = 12
     n_head: int = 12
     n_embd: int = 768
     n_kv_heads: int = 3  # GQA: 4x compression
-    block_size: int = 4096  # Matching your tokenizer context
+    block_size: int = 2048  # Context length
     dropout: float = 0.05
     bias: bool = False
     rope_theta: float = 10000.0
@@ -229,13 +229,15 @@ class OptimizedTop2Router(nn.Module):
         self.capacity_factor = capacity_factor
         self.jitter = jitter
         
-        # Router weights in FP8-compatible format
-        self.gate = te.Linear(
+        # PATCH 1: Use standard nn.Linear for router (not TE) to avoid FP8 issues
+        # with small output dimensions (num_experts=8)
+        self.gate = nn.Linear(
             n_embd, 
             num_experts, 
-            bias=False, 
-            params_dtype=torch.bfloat16
+            bias=False
         )
+        # Initialize in BF16
+        self.gate.weight.data = self.gate.weight.data.to(torch.bfloat16)
     
     def forward(self, x):
         """
@@ -376,21 +378,20 @@ class MoEFeedForward(nn.Module):
             expert_input = x_flat[expert_mask]
             num_tokens = expert_input.shape[0]
             
-            # Skip if too few tokens (can cause FP8 issues)
-            if num_tokens < 8 and self.fp8_pad_for_moe:
-                # For very small batches, might be better to skip
-                # But we still need to pad for correctness
+            # Note: Even small batches will be padded to 16 for FP8 safety
+            if num_tokens < 16 and self.fp8_pad_for_moe:
+                # Small batches will be padded up to 16 tokens
                 pass
             
             # Track usage for this expert
             expert_usage[e] = num_tokens / (B * T)
             
-            # FP8 alignment: ensure batch dimension is divisible by 8
+            # PATCH 2: FP8 alignment - pad to multiple of 16 for safer backward pass
             # Pad if necessary for FP8 execution
             padded = False
             if self.fp8_pad_for_moe and num_tokens > 0:
-                # Always pad to multiple of 8 for FP8
-                padded_size = ((num_tokens + 7) // 8) * 8
+                # Pad to multiple of 16 for more reliable FP8 GEMM in backward
+                padded_size = ((num_tokens + 15) // 16) * 16
                 if padded_size != num_tokens:
                     pad_size = padded_size - num_tokens
                     expert_input = torch.cat([
@@ -617,7 +618,9 @@ if __name__ == "__main__":
     x = torch.randint(0, config.vocab_size, (2, 128)).cuda()
     fp8_recipe = get_fp8_recipe(config)
     
-    print("\nTesting CLEAN MoE implementation...")
+    print("\nTesting CLEAN MoE implementation with FP8 patches...")
+    print("  - Router uses nn.Linear (not TE) for small expert counts")
+    print("  - Expert batches padded to multiples of 16 for FP8 safety")
     
     with te.fp8_autocast(enabled=True, fp8_recipe=fp8_recipe):
         logits, loss = model(x, targets=x)
