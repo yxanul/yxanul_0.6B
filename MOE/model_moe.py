@@ -87,9 +87,9 @@ class ModelConfig:
     # Sigmoid router (variable compute) + loss-free balancing
     router_type: str = "sigmoid"         # {"sigmoid","softmax_topk"}
     router_tau: float = 1.0
-    router_threshold: float = 0.50       # raise to reduce activations
-    router_stochastic: bool = True       # Bernoulli during training
-    router_max_active_experts: int = 1   # hard cap per token (GLM-ish efficient)
+    router_threshold: float = 0.0        # IGNORED when max_active_experts=1
+    router_stochastic: bool = False      # DISABLED - using deterministic top-1
+    router_max_active_experts: int = 1   # ENFORCES exactly 1 expert per token
     balance_loss_free: bool = True       # aux-free uniformization via bias
     balance_ema_beta: float = 0.9
     balance_alpha: float = 0.1
@@ -322,29 +322,37 @@ class PyramidResidualMoE(nn.Module):
         self.balance_bias.add_(-self.cfg.balance_alpha * (self.ema_load - target))
 
     def _route_sigmoid(self, x: torch.Tensor):
-        # logits + bias → sigmoid probs → active mask (+ ensure ≥1) → cap → renormalize
+        # logits + bias → sigmoid probs
         logits = (self.router(x) + self.balance_bias.view(1,1,-1)) / max(self.cfg.router_tau, 1e-6)
         probs = torch.sigmoid(logits)
 
-        if self.cfg.router_stochastic and self.training:
-            active = torch.bernoulli(probs.clamp(0,1).float()).to(probs.dtype)
+        # DETERMINISTIC TOP-1 when max_active_experts == 1
+        if self.cfg.router_max_active_experts == 1:
+            # Always select exactly top-1 expert per token for constant compute
+            top1_idx = probs.argmax(dim=-1)  # [B,T]
+            active = F.one_hot(top1_idx, num_classes=self.cfg.moe_num_experts).to(probs.dtype)
         else:
-            active = (probs >= self.cfg.router_threshold).to(probs.dtype)
+            # Original logic for k > 1
+            if self.cfg.router_stochastic and self.training:
+                active = torch.bernoulli(probs.clamp(0,1).float()).to(probs.dtype)
+            else:
+                active = (probs >= self.cfg.router_threshold).to(probs.dtype)
 
-        # ensure at least one expert per token
-        none = (active.sum(dim=-1, keepdim=True) == 0)
-        if none.any():
-            top1 = torch.argmax(probs, dim=-1, keepdim=True)
-            fix = F.one_hot(top1.squeeze(-1), probs.size(-1)).to(probs.dtype).unsqueeze(2).squeeze(2)
-            active = torch.where(none, fix, active)
+            # ensure at least one expert per token
+            none = (active.sum(dim=-1, keepdim=True) == 0)
+            if none.any():
+                top1 = torch.argmax(probs, dim=-1, keepdim=True)
+                fix = F.one_hot(top1.squeeze(-1), probs.size(-1)).to(probs.dtype).unsqueeze(2).squeeze(2)
+                active = torch.where(none, fix, active)
 
-        # hard cap k active experts/token
-        if self.cfg.router_max_active_experts and self.cfg.router_max_active_experts > 0:
-            k = min(self.cfg.router_max_active_experts, probs.size(-1))
-            topv, topi = torch.topk(probs, k=k, dim=-1)
-            cap = torch.zeros_like(active).scatter_(-1, topi, 1.0)
-            active = active * cap
+            # hard cap k active experts/token
+            if self.cfg.router_max_active_experts and self.cfg.router_max_active_experts > 0:
+                k = min(self.cfg.router_max_active_experts, probs.size(-1))
+                topv, topi = torch.topk(probs, k=k, dim=-1)
+                cap = torch.zeros_like(active).scatter_(-1, topi, 1.0)
+                active = active * cap
 
+        # Compute weights (probabilities of selected experts only)
         weights = probs * active
         weights = weights / weights.sum(dim=-1, keepdim=True).clamp_min(1e-6)
 
