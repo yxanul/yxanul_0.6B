@@ -296,7 +296,9 @@ class MoELayer(nn.Module):
             
             # Apply gate weights for gradient flow through router
             gate_values = gates.view(-1, self.config.num_experts)[indices, e].unsqueeze(-1)
-            output_flat.index_add_(0, indices, gate_values * expert_output)
+            # Ensure dtype consistency for index_add_
+            weighted_output = (gate_values * expert_output).to(output_flat.dtype)
+            output_flat.index_add_(0, indices, weighted_output)
         
         # Reshape output
         output = output_flat.view(B, T, C)
